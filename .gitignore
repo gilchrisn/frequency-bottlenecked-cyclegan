@@ -1,5 +1,35 @@
-# Object file
-*.o
+# Virtual environment
+.venv/
+venv/
 
-# Ada Library Information
-*.ali
+# Data (too large for git)
+data/raw/
+data/processed/
+
+# Outputs
+outputs/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# W&B
+wandb/
+
+CLAUDE.md
+docs

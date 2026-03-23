@@ -1,0 +1,872 @@
+\documentclass[11pt,a4paper]{article}
+
+% --- Packages ---
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{mathtools}
+\usepackage{bm}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{tcolorbox}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!70!black,
+    citecolor=green!50!black,
+    urlcolor=blue!60!black
+}
+
+% --- Environments ---
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}[section]
+\newtheorem{remark}{Remark}[section]
+\newtheorem{example}{Example}[section]
+
+\newtcolorbox{keyinsight}{
+    colback=blue!5!white,
+    colframe=blue!50!black,
+    title=Key Insight for FB-CycleGAN,
+    fonttitle=\bfseries
+}
+
+\newtcolorbox{edgecase}{
+    colback=red!5!white,
+    colframe=red!50!black,
+    title=Edge Case / Pitfall,
+    fonttitle=\bfseries
+}
+
+\newtcolorbox{implementation}{
+    colback=green!5!white,
+    colframe=green!50!black,
+    title=Implementation Note,
+    fonttitle=\bfseries
+}
+
+% --- Header ---
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small FB-CycleGAN Prerequisites}
+\fancyhead[R]{\small CS424 Group Project}
+\fancyfoot[C]{\thepage}
+
+\title{\textbf{Frequency-Bottlenecked CycleGAN} \\[0.5em]
+\Large Theoretical Prerequisites \& Literature Review}
+\author{CS424 Group Project --- Task 2}
+\date{March 2026}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+% ======================================================================
+\section{Introduction}
+% ======================================================================
+
+This document is a self-contained reference covering every theoretical prerequisite needed to implement FB-CycleGAN. It is organized to match the project's architecture: we start with the mathematical foundations (linear algebra, calculus, signal processing), build up to deep learning theory (GANs, cycle-consistency, architectures), cover the medical imaging domain, and conclude with evaluation metrics and a literature review.
+
+\textbf{How to use this document:} Each section ends with edge cases and pitfalls specific to our project. Read the theory, then read the edge cases---those are where projects fail.
+
+% ======================================================================
+\section{Mathematical Foundations}
+% ======================================================================
+
+% ----------------------------------------------------------------------
+\subsection{Linear Algebra Essentials}
+% ----------------------------------------------------------------------
+
+\begin{definition}[Affine Transformation]
+Every layer in a neural network without activation computes $\bm{y} = \bm{W}\bm{x} + \bm{b}$, where $\bm{W} \in \mathbb{R}^{m \times n}$ is the weight matrix, $\bm{x} \in \mathbb{R}^n$ is the input, and $\bm{b} \in \mathbb{R}^m$ is the bias.
+\end{definition}
+
+For convolutional layers, the ``weight matrix'' is replaced by a convolution kernel $\bm{K} \in \mathbb{R}^{c_{\text{out}} \times c_{\text{in}} \times k \times k}$, but the operation is still linear. This matters because:
+
+\begin{enumerate}[label=(\alph*)]
+    \item \textbf{Gradient flow} through the network is computed via the chain rule over these linear maps.
+    \item \textbf{Skip connections} (ResNet blocks) add the identity: $\bm{y} = \mathcal{F}(\bm{x}) + \bm{x}$, which preserves the gradient magnitude (prevents vanishing gradients).
+    \item \textbf{Transpose convolutions} used in the generator's upsampling path are the adjoint of convolutions. They can introduce checkerboard artifacts if the kernel size is not divisible by the stride.
+\end{enumerate}
+
+\begin{edgecase}
+Transpose convolutions with $\text{kernel\_size} = 4$, $\text{stride} = 2$ produce checkerboard artifacts because the output pixels receive uneven contributions from the kernel. The standard CycleGAN uses this configuration but mitigates it via instance normalization. If you switch to nearest-neighbor upsampling + convolution, you avoid the artifact entirely but change the gradient dynamics.
+\end{edgecase}
+
+% ----------------------------------------------------------------------
+\subsection{Multivariable Calculus \& Backpropagation}
+% ----------------------------------------------------------------------
+
+Backpropagation computes $\frac{\partial \mathcal{L}}{\partial \bm{W}_\ell}$ for each layer $\ell$ via the chain rule:
+\begin{equation}
+    \frac{\partial \mathcal{L}}{\partial \bm{W}_\ell} = \frac{\partial \mathcal{L}}{\partial \bm{a}_L} \cdot \frac{\partial \bm{a}_L}{\partial \bm{a}_{L-1}} \cdots \frac{\partial \bm{a}_{\ell+1}}{\partial \bm{a}_\ell} \cdot \frac{\partial \bm{a}_\ell}{\partial \bm{W}_\ell}
+\end{equation}
+where $\bm{a}_\ell$ is the activation at layer $\ell$.
+
+\begin{keyinsight}
+The Gaussian blur $B(\cdot)$ in FB-CycleGAN is inserted \emph{inside} the computational graph. Because Gaussian blur is a linear convolution with fixed (non-learnable) weights, it is fully differentiable. Gradients flow through $B$ via:
+\[
+    \frac{\partial \mathcal{L}_{\text{FB-cyc}}}{\partial G} = \frac{\partial \mathcal{L}}{\partial F(B(G(p)))} \cdot \frac{\partial F}{\partial B(G(p))} \cdot \frac{\partial B}{\partial G(p)} \cdot \frac{\partial G}{\partial \theta_G}
+\]
+The term $\frac{\partial B}{\partial G(p)}$ is just the Gaussian kernel applied to the gradient map (convolution is its own adjoint for symmetric kernels). This means the blur \textbf{attenuates high-frequency gradient components} in addition to attenuating high-frequency activations.
+\end{keyinsight}
+
+\begin{edgecase}
+Because $B$ attenuates high-frequency gradients, the generator receives weaker learning signal for fine texture details. At large $\sigma$, this can cause the generator to produce overly smooth outputs (low FID but also low SSIM). This is the honesty-vs-quality tradeoff you will observe in the Pareto analysis.
+\end{edgecase}
+
+% ----------------------------------------------------------------------
+\subsection{Signal Processing \& Fourier Analysis}
+% ----------------------------------------------------------------------
+
+\begin{definition}[2D Discrete Fourier Transform]
+For an image $f[m,n]$ of size $M \times N$:
+\begin{equation}
+    F[u,v] = \sum_{m=0}^{M-1} \sum_{n=0}^{N-1} f[m,n] \cdot e^{-j2\pi\left(\frac{um}{M} + \frac{vn}{N}\right)}
+\end{equation}
+The \textbf{power spectrum} is $|F[u,v]|^2$, which decomposes the image into spatial frequency components. Low frequencies (near center after \texttt{fftshift}) encode global structure; high frequencies (near edges) encode fine detail and noise.
+\end{definition}
+
+\textbf{Why this matters for steganography detection:}
+
+When a CycleGAN generator hides information steganographically, it encodes data as imperceptible high-frequency patterns. Given a generated image $\hat{h} = G(p)$ and its source $p$, the residual $r = |\hat{h} - p|$ should be:
+\begin{itemize}
+    \item \textbf{Steganographic generator:} Structured high-frequency energy in $|F_r[u,v]|^2$ (information-carrying patterns).
+    \item \textbf{Honest generator:} Diffuse, unstructured spectrum (only natural image differences).
+\end{itemize}
+
+\begin{definition}[Power Spectral Density --- Radial Average]
+To visualize the frequency content as a 1D curve, compute the radially averaged power spectrum:
+\begin{equation}
+    P(\rho) = \frac{1}{|\{(u,v) : \sqrt{u^2+v^2} \approx \rho\}|} \sum_{\sqrt{u^2+v^2} \approx \rho} |F[u,v]|^2
+\end{equation}
+Plot $P(\rho)$ vs.\ $\rho$ on a log-log scale. Steganographic artifacts appear as bumps or plateaus at high $\rho$.
+\end{definition}
+
+\begin{edgecase}
+When computing FFT residuals, be careful about:
+\begin{enumerate}
+    \item \textbf{Windowing:} Image boundaries cause spectral leakage. Apply a Hann or Tukey window before FFT.
+    \item \textbf{Normalization:} Compare spectra on the same scale. Normalize by image energy.
+    \item \textbf{Batch statistics:} A single image's spectrum is noisy. Average over many samples to see the steganographic pattern.
+\end{enumerate}
+\end{edgecase}
+
+% ----------------------------------------------------------------------
+\subsection{Gaussian Filtering \& the Frequency Bottleneck}
+% ----------------------------------------------------------------------
+
+\begin{definition}[2D Gaussian Kernel]
+The continuous 2D Gaussian with standard deviation $\sigma$:
+\begin{equation}
+    g(x,y) = \frac{1}{2\pi\sigma^2} \exp\left(-\frac{x^2+y^2}{2\sigma^2}\right)
+\end{equation}
+Discretized to a $k \times k$ kernel. The relationship between $k$ and $\sigma$: typically $k = \lceil 6\sigma \rceil$ rounded to odd, ensuring $>99.7\%$ of the Gaussian mass is captured.
+\end{definition}
+
+\begin{definition}[Low-Pass Filter Interpretation]
+The Fourier transform of a Gaussian is a Gaussian:
+\begin{equation}
+    \mathcal{F}\{g\}(u,v) = \exp\left(-2\pi^2\sigma^2(u^2+v^2)\right)
+\end{equation}
+This means $B(\cdot)$ attenuates frequency component $(u,v)$ by a factor of $\exp(-2\pi^2\sigma^2(u^2+v^2))$. The \textbf{effective cutoff frequency} (where attenuation reaches $1/e$) is:
+\begin{equation}
+    f_{\text{cutoff}} = \frac{1}{2\pi\sigma}
+\end{equation}
+\end{definition}
+
+\begin{keyinsight}
+This is the core mechanism of FB-CycleGAN. The steganographic channel capacity is bounded by the information that can pass through $B$. By choosing $\sigma$, you control the maximum spatial frequency available for encoding. A larger $\sigma$ means a lower cutoff frequency, which means less bandwidth for hiding information, but also less capacity for preserving legitimate high-frequency detail (edges, texture).
+
+\vspace{0.5em}
+\textbf{Information-theoretic view:} The blur acts as a channel with limited bandwidth. The channel capacity $C$ scales inversely with $\sigma$. At sufficiently large $\sigma$, the capacity is too low to encode the tumor coordinates needed for cycle reconstruction, forcing the generator to preserve pathology visibly.
+\end{keyinsight}
+
+\begin{edgecase}
+\textbf{Kernel size vs.\ sigma mismatch:} If $k$ is too small relative to $\sigma$, the kernel is truncated and the actual filter is not a true Gaussian. This introduces ringing artifacts. Always use $k \geq 6\sigma + 1$.
+
+\vspace{0.3em}
+\textbf{Boundary effects:} \texttt{torchvision.transforms.GaussianBlur} uses reflection padding by default. This is fine for natural images but can cause artifacts at brain boundaries where the image transitions to zero background. Consider padding with zeros or the image mean before blurring.
+
+\vspace{0.3em}
+\textbf{Gradient magnitude:} The blur reduces gradient norms by $\approx 1/\sigma^2$ for high-frequency components. At $\sigma = 3$, the generator gets $\sim$9$\times$ weaker gradients for fine details. You may need to adjust learning rates or use gradient scaling.
+\end{edgecase}
+
+% ======================================================================
+\section{Deep Learning Theory}
+% ======================================================================
+
+% ----------------------------------------------------------------------
+\subsection{Generative Adversarial Networks}
+% ----------------------------------------------------------------------
+
+\begin{definition}[GAN Minimax Objective]
+The original GAN objective (Goodfellow et al., 2014):
+\begin{equation}
+    \min_G \max_D \; \mathbb{E}_{\bm{x} \sim p_{\text{data}}}[\log D(\bm{x})] + \mathbb{E}_{\bm{z} \sim p_z}[\log(1 - D(G(\bm{z})))]
+\end{equation}
+At the Nash equilibrium, $D^*(\bm{x}) = \frac{p_{\text{data}}(\bm{x})}{p_{\text{data}}(\bm{x}) + p_G(\bm{x})} = \frac{1}{2}$ and $G$ generates samples from $p_{\text{data}}$.
+\end{definition}
+
+\textbf{Training instabilities:}
+\begin{enumerate}
+    \item \textbf{Vanishing gradients:} When $D$ is too strong, $D(G(\bm{z})) \approx 0$ for all generated samples, and $\log(1 - D(G(\bm{z}))) \approx 0$ provides near-zero gradient to $G$.
+    \item \textbf{Mode collapse:} $G$ maps all inputs to a single output that fools $D$, ignoring the diversity of the data distribution.
+    \item \textbf{Oscillation:} $G$ and $D$ chase each other without converging.
+\end{enumerate}
+
+\begin{definition}[LSGAN --- Least Squares GAN]
+Mao et al.\ (2017) replace the log-likelihood with L2 loss:
+\begin{align}
+    \mathcal{L}_D &= \frac{1}{2}\mathbb{E}_{\bm{x}}[(D(\bm{x}) - 1)^2] + \frac{1}{2}\mathbb{E}_{\bm{z}}[D(G(\bm{z}))^2] \\
+    \mathcal{L}_G &= \frac{1}{2}\mathbb{E}_{\bm{z}}[(D(G(\bm{z})) - 1)^2]
+\end{align}
+LSGAN penalizes samples that are far from the decision boundary even if they are on the correct side, providing non-vanishing gradients. This is the default in CycleGAN.
+\end{definition}
+
+\begin{edgecase}
+\textbf{LSGAN target values:} The original LSGAN paper uses $a=0, b=1, c=1$ (real=1, fake=0, generator target=1). Some implementations use $a=-1, b=1, c=0$ (centered). Both work but you must be consistent. Check your implementation matches the discriminator's output range.
+\end{edgecase}
+
+% ----------------------------------------------------------------------
+\subsection{CycleGAN Architecture}
+% ----------------------------------------------------------------------
+
+CycleGAN (Zhu et al., 2017) learns two mappings $G: \mathcal{P} \to \mathcal{H}$ and $F: \mathcal{H} \to \mathcal{P}$ with two discriminators $D_H$ and $D_P$.
+
+\textbf{Full objective:}
+\begin{equation}
+    \mathcal{L}_{\text{total}} = \mathcal{L}_{\text{GAN}}(G, D_H) + \mathcal{L}_{\text{GAN}}(F, D_P) + \lambda_{\text{cyc}} \mathcal{L}_{\text{cyc}}(G, F) + \lambda_{\text{id}} \mathcal{L}_{\text{id}}(G, F)
+\end{equation}
+
+\textbf{Cycle-consistency loss:}
+\begin{equation}
+    \mathcal{L}_{\text{cyc}}(G, F) = \mathbb{E}_p\left[\|F(G(p)) - p\|_1\right] + \mathbb{E}_h\left[\|G(F(h)) - h\|_1\right]
+\end{equation}
+
+\textbf{Identity loss:}
+\begin{equation}
+    \mathcal{L}_{\text{id}}(G, F) = \mathbb{E}_h\left[\|G(h) - h\|_1\right] + \mathbb{E}_p\left[\|F(p) - p\|_1\right]
+\end{equation}
+
+\textbf{FB-CycleGAN modification:} Replace $\mathcal{L}_{\text{cyc}}$ with:
+\begin{equation}
+    \mathcal{L}_{\text{FB-cyc}}(G, F) = \mathbb{E}_p\left[\|F(\underbrace{B(G(p))}_{\text{blurred}})-p\|_1\right] + \mathbb{E}_h\left[\|G(\underbrace{B(F(h))}_{\text{blurred}})-h\|_1\right]
+\end{equation}
+
+\begin{keyinsight}
+The identity loss $\mathcal{L}_{\text{id}}$ is weighted by $\lambda_{\text{id}} \cdot \lambda_{\text{cyc}}$ (i.e., \texttt{lambda\_identity} $\times$ \texttt{lambda\_cycle} $= 0.5 \times 10 = 5$). This is a strong regularizer. In the FB-CycleGAN setting, you may want to experiment with reducing $\lambda_{\text{id}}$ since the bottleneck already provides structural regularization.
+\end{keyinsight}
+
+\begin{edgecase}
+\textbf{Where exactly to insert the blur.} The blur goes between $G$'s output and $F$'s input in the cycle path, and between $F$'s output and $G$'s input. It does \textbf{not} go:
+\begin{itemize}
+    \item Before the discriminator (that would change what $D$ sees and break adversarial training).
+    \item In the identity loss path (identity loss compares $G(h)$ to $h$ directly, no cycle involved).
+    \item In the forward pass for generating final outputs at test time (blur is training-only in the cycle path).
+\end{itemize}
+Getting this wrong fundamentally changes the method.
+\end{edgecase}
+
+% ----------------------------------------------------------------------
+\subsection{Generator Architecture: ResNet-9 Blocks}
+% ----------------------------------------------------------------------
+
+The standard CycleGAN generator for $256 \times 256$ images:
+
+\begin{enumerate}
+    \item \textbf{Encoder} (downsampling):
+    \begin{itemize}
+        \item $7 \times 7$ Conv, InstanceNorm, ReLU ($c_{\text{in}} \to 64$) with ReflectionPad
+        \item $3 \times 3$ Conv stride 2, InstanceNorm, ReLU ($64 \to 128$)
+        \item $3 \times 3$ Conv stride 2, InstanceNorm, ReLU ($128 \to 256$)
+    \end{itemize}
+
+    \item \textbf{Transformer} (residual blocks):
+    \begin{itemize}
+        \item $9 \times$ ResNet block: ReflectionPad $\to$ $3 \times 3$ Conv $\to$ InstanceNorm $\to$ ReLU $\to$ ReflectionPad $\to$ $3 \times 3$ Conv $\to$ InstanceNorm $+$ skip
+    \end{itemize}
+
+    \item \textbf{Decoder} (upsampling):
+    \begin{itemize}
+        \item $3 \times 3$ ConvTranspose stride 2, InstanceNorm, ReLU ($256 \to 128$)
+        \item $3 \times 3$ ConvTranspose stride 2, InstanceNorm, ReLU ($128 \to 64$)
+        \item $7 \times 7$ Conv, Tanh ($64 \to c_{\text{out}}$) with ReflectionPad
+    \end{itemize}
+\end{enumerate}
+
+\begin{definition}[Instance Normalization]
+Unlike BatchNorm (normalizes across the batch), InstanceNorm normalizes each sample and channel independently:
+\begin{equation}
+    \text{IN}(x_{n,c}) = \frac{x_{n,c} - \mu_{n,c}}{\sqrt{\sigma^2_{n,c} + \epsilon}}
+\end{equation}
+where $\mu_{n,c}$ and $\sigma^2_{n,c}$ are computed over the spatial dimensions $H \times W$ for each sample $n$ and channel $c$. This is crucial for style transfer as it removes instance-specific contrast information.
+\end{definition}
+
+\begin{edgecase}
+\textbf{InstanceNorm with single-channel input:} For our 1-channel FLAIR MRI, InstanceNorm normalizes across the entire $256 \times 256$ spatial extent of each image. This effectively removes the global intensity information from each feature map. For MRI, where absolute intensity carries diagnostic information, this could be problematic. Consider:
+\begin{itemize}
+    \item Using InstanceNorm with \texttt{affine=True} to learn a scale/shift
+    \item Or experimenting with GroupNorm or LayerNorm as alternatives
+\end{itemize}
+\end{edgecase}
+
+\begin{edgecase}
+\textbf{ReflectionPad vs.\ ZeroPad:} ReflectionPad avoids border artifacts by mirroring the image at boundaries. However, for brain MRI where the brain is surrounded by zero background, reflection padding at the brain-background boundary reflects actual brain content into the background. This is usually acceptable but worth monitoring in generated outputs.
+\end{edgecase}
+
+% ----------------------------------------------------------------------
+\subsection{Discriminator Architecture: PatchGAN}
+% ----------------------------------------------------------------------
+
+\begin{definition}[PatchGAN]
+Instead of classifying the entire image as real/fake, PatchGAN outputs an $N \times N$ map where each element classifies a \textbf{receptive field patch} of the input. The $70 \times 70$ PatchGAN:
+\begin{enumerate}
+    \item $4 \times 4$ Conv stride 2, LeakyReLU(0.2) ($c_{\text{in}} \to 64$)
+    \item $4 \times 4$ Conv stride 2, InstanceNorm, LeakyReLU(0.2) ($64 \to 128$)
+    \item $4 \times 4$ Conv stride 2, InstanceNorm, LeakyReLU(0.2) ($128 \to 256$)
+    \item $4 \times 4$ Conv stride 1, InstanceNorm, LeakyReLU(0.2) ($256 \to 512$)
+    \item $4 \times 4$ Conv stride 1 ($512 \to 1$)
+\end{enumerate}
+\end{definition}
+
+\textbf{Receptive field calculation:}
+\begin{equation}
+    r_\ell = r_{\ell-1} + (k_\ell - 1) \cdot \prod_{i=1}^{\ell-1} s_i
+\end{equation}
+where $r_\ell$ is the receptive field at layer $\ell$, $k_\ell$ is the kernel size, and $s_i$ is the stride at layer $i$.
+
+For the $70 \times 70$ PatchGAN:
+\begin{align}
+    r_1 &= 4 \\
+    r_2 &= 4 + (4-1) \cdot 2 = 10 \\
+    r_3 &= 10 + (4-1) \cdot 4 = 22 \\
+    r_4 &= 22 + (4-1) \cdot 8 = 46 \\
+    r_5 &= 46 + (4-1) \cdot 8 = 70 \quad \checkmark
+\end{align}
+
+\begin{keyinsight}
+The $70 \times 70$ receptive field means the discriminator focuses on \textbf{local texture} rather than global structure. This is good for our task: we want the generator to produce locally realistic tissue textures. However, it also means the discriminator cannot detect global structural inconsistencies (e.g., a tumor appearing in an anatomically impossible location). The cycle-consistency loss handles global structure instead.
+\end{keyinsight}
+
+% ----------------------------------------------------------------------
+\subsection{The Steganography Problem}
+% ----------------------------------------------------------------------
+
+\textbf{Why does steganography happen?} Consider the forward cycle: $p \xrightarrow{G} \hat{h} \xrightarrow{F} \hat{p}$. The cycle loss penalizes $\|\hat{p} - p\|_1$. If domains $\mathcal{P}$ (pathological) and $\mathcal{H}$ (healthy) are structurally asymmetric (one has tumors, the other doesn't), then $G$ has two options:
+
+\begin{enumerate}
+    \item \textbf{Honest translation:} Remove the tumor from $p$ to produce $\hat{h}$. But then $F$ must reconstruct the tumor from $\hat{h}$, which is impossible without knowing where the tumor was. High $\mathcal{L}_{\text{cyc}}$.
+
+    \item \textbf{Steganographic encoding:} $G$ produces an image $\hat{h}$ that \emph{looks} healthy but encodes the tumor's location and shape as imperceptible high-frequency noise. $F$ reads this noise to perfectly reconstruct $p$. Low $\mathcal{L}_{\text{cyc}}$.
+\end{enumerate}
+
+Option 2 achieves lower training loss, so gradient descent converges to it. The steganographic channel capacity of a $256 \times 256$ image is enormous---even 1 bit per pixel gives $65536$ bits, more than enough to encode a tumor mask.
+
+\begin{keyinsight}
+FB-CycleGAN attacks this by reducing the channel capacity. After $B(\cdot)$ with cutoff frequency $f_c = \frac{1}{2\pi\sigma}$, the effective number of independent frequency components that survive is:
+\[
+    N_{\text{eff}} \approx \pi \left(\frac{N}{2\pi\sigma}\right)^2 = \frac{N^2}{4\pi\sigma^2}
+\]
+For $N=256$, $\sigma=1$: $N_{\text{eff}} \approx 5215$ (still large). For $\sigma=3$: $N_{\text{eff}} \approx 579$ (severely restricted). At some $\sigma^*$, the capacity drops below what's needed to encode the tumor, forcing honest translation.
+\end{keyinsight}
+
+\begin{edgecase}
+\textbf{Partial steganography:} The generator might learn to encode \textit{some} information in the passband frequencies (below the cutoff). The blur doesn't eliminate \textit{all} information hiding---it only eliminates the high-frequency channel. Monitor the low-frequency residual spectrum for structured patterns even with the bottleneck active.
+\end{edgecase}
+
+% ----------------------------------------------------------------------
+\subsection{Image Replay Buffer}
+% ----------------------------------------------------------------------
+
+\begin{definition}[Replay Buffer for GANs]
+Maintain a buffer of $N$ (typically 50) previously generated images. When updating the discriminator, with probability 0.5, replace the current generated image with a random image from the buffer (and add the current one to the buffer). This prevents the discriminator from overfitting to the generator's most recent outputs and stabilizes training.
+\end{definition}
+
+\begin{edgecase}
+\textbf{Memory management:} With batch size 1 and $256 \times 256$ single-channel images, a 50-image buffer is $\sim$12.5 MB (negligible). But if you experiment with batch size $>1$ or multi-channel inputs, the buffer scales as $B \times C \times H \times W \times 4$ bytes $\times$ 50.
+\end{edgecase}
+
+% ======================================================================
+\section{Medical Imaging Domain}
+% ======================================================================
+
+% ----------------------------------------------------------------------
+\subsection{Brain MRI \& FLAIR Sequences}
+% ----------------------------------------------------------------------
+
+Magnetic Resonance Imaging (MRI) produces 3D volumetric scans by measuring the magnetic relaxation properties of hydrogen atoms in tissue. Different \textbf{pulse sequences} weight different tissue properties:
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Sequence & Weighting & Clinical Use \\
+\midrule
+T1 & Longitudinal relaxation & Anatomy, gray/white matter contrast \\
+T1CE & T1 + gadolinium contrast & Enhancing tumor boundaries \\
+T2 & Transverse relaxation & Edema, fluid-filled structures \\
+\textbf{FLAIR} & \textbf{T2 with CSF suppression} & \textbf{Tumor + edema (highest contrast)} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Why FLAIR:} In T2-weighted images, both tumor edema and cerebrospinal fluid (CSF) appear bright, making it hard to distinguish them. FLAIR suppresses the CSF signal, so only pathological tissue remains bright. This gives the highest tumor-to-background contrast, which is why the proposal uses FLAIR.
+
+% ----------------------------------------------------------------------
+\subsection{BraTS 2020 Dataset}
+% ----------------------------------------------------------------------
+
+\begin{itemize}
+    \item 369 multi-parametric MRI volumes: 293 HGG (high-grade glioma) + 76 LGG (low-grade glioma)
+    \item Each volume: 4 sequences (T1, T1CE, T2, FLAIR) at $240 \times 240 \times 155$ voxels
+    \item Voxel-level segmentation mask: enhancing tumor (ET), peritumoral edema (ED), necrotic core (NCR)
+    \item Stored as NIfTI (\texttt{.nii.gz}) files
+\end{itemize}
+
+\textbf{Domain assignment per 2D axial slice:}
+\begin{itemize}
+    \item $\mathcal{P}$ (pathological): segmentation mask shows tumor area $> 5\%$ of brain region
+    \item $\mathcal{H}$ (healthy): mask is entirely zero AND brain area $>$ minimum threshold
+\end{itemize}
+
+\begin{edgecase}
+\textbf{Slice selection bias:} Tumors are concentrated in the middle axial slices. The top and bottom slices are mostly empty skull/air. If you naively extract all 155 slices, you'll have a massive class imbalance (many empty or near-empty slices in $\mathcal{H}$). Filter aggressively: require minimum brain area in healthy slices.
+
+\vspace{0.3em}
+\textbf{Inter-slice correlation:} Adjacent slices from the same volume are highly correlated. If you split train/val/test by slice rather than by patient, you'll have severe data leakage. \textbf{Always split by patient ID.}
+
+\vspace{0.3em}
+\textbf{Intensity non-uniformity:} MRI intensities are not standardized across scanners or patients. The proposal specifies Z-score normalization \textbf{per volume} (not per slice). This is important---per-slice normalization would destroy the relative intensity information within a volume.
+\end{edgecase}
+
+% ----------------------------------------------------------------------
+\subsection{NIfTI Data Pipeline}
+% ----------------------------------------------------------------------
+
+\textbf{Loading a NIfTI volume with nibabel:}
+\begin{enumerate}
+    \item Load: \texttt{nib.load(path)} returns a NIfTI image object
+    \item Extract array: \texttt{np.asarray(img.dataobj)} $\to$ shape $(240, 240, 155)$
+    \item Extract axial slices: \texttt{volume[:, :, z]} for slice index $z$
+    \item The segmentation mask has values: 0 (background), 1 (NCR), 2 (ED), 4 (ET)
+\end{enumerate}
+
+\textbf{Preprocessing per slice:}
+\begin{enumerate}
+    \item Compute brain mask: \texttt{brain = volume > 0}
+    \item Find bounding box of brain region
+    \item Center-crop to bounding box
+    \item Resize to $256 \times 256$ (bilinear interpolation for images, nearest-neighbor for masks)
+    \item Z-score normalize using volume-level statistics: $x' = \frac{x - \mu_{\text{vol}}}{\sigma_{\text{vol}}}$ (computed only over non-zero voxels)
+\end{enumerate}
+
+\begin{edgecase}
+\textbf{Mask label encoding:} BraTS uses labels $\{0, 1, 2, 4\}$ (note: no label 3). When computing tumor area, use $\text{mask} > 0$. Don't assume contiguous labels.
+
+\vspace{0.3em}
+\textbf{Resize interpolation:} Using bilinear interpolation on the segmentation mask will create non-integer values at boundaries. Always use nearest-neighbor for masks.
+\end{edgecase}
+
+% ======================================================================
+\section{Evaluation Metrics}
+% ======================================================================
+
+% ----------------------------------------------------------------------
+\subsection{Fr\'echet Inception Distance (FID)}
+% ----------------------------------------------------------------------
+
+\begin{definition}[FID]
+FID measures the distance between the real and generated image distributions in the feature space of an Inception-v3 network:
+\begin{equation}
+    \text{FID} = \|\bm{\mu}_r - \bm{\mu}_g\|^2 + \text{Tr}\left(\bm{\Sigma}_r + \bm{\Sigma}_g - 2(\bm{\Sigma}_r \bm{\Sigma}_g)^{1/2}\right)
+\end{equation}
+where $(\bm{\mu}_r, \bm{\Sigma}_r)$ and $(\bm{\mu}_g, \bm{\Sigma}_g)$ are the mean and covariance of Inception features for real and generated images respectively. Lower FID = better.
+\end{definition}
+
+\begin{edgecase}
+\textbf{FID on single-channel medical images:} Inception-v3 expects 3-channel RGB input. For our 1-channel FLAIR images, you must either:
+\begin{itemize}
+    \item Replicate the channel 3 times: $x_{\text{rgb}} = [x, x, x]$
+    \item Or use a medical-image-specific feature extractor (e.g., a pretrained ResNet on RadImageNet)
+\end{itemize}
+The first approach is standard but the FID values won't be comparable to those reported on natural image benchmarks. Be consistent across your own experiments.
+
+\vspace{0.3em}
+\textbf{Sample size:} FID is biased for small sample sizes. Use at least 500 images from each distribution, ideally more. Report the number of samples used.
+\end{edgecase}
+
+% ----------------------------------------------------------------------
+\subsection{Structural Similarity Index (SSIM)}
+% ----------------------------------------------------------------------
+
+\begin{definition}[SSIM]
+SSIM compares images on three components---luminance ($l$), contrast ($c$), and structure ($s$):
+\begin{equation}
+    \text{SSIM}(x, y) = l(x,y) \cdot c(x,y) \cdot s(x,y) = \frac{(2\mu_x\mu_y + C_1)(2\sigma_{xy} + C_2)}{(\mu_x^2 + \mu_y^2 + C_1)(\sigma_x^2 + \sigma_y^2 + C_2)}
+\end{equation}
+where $C_1 = (K_1 L)^2$, $C_2 = (K_2 L)^2$ are stabilization constants, $L$ is the dynamic range, and statistics are computed over local windows.
+\end{definition}
+
+\textbf{In our context:} SSIM measures cycle-reconstruction fidelity: how well does $F(B(G(p)))$ match $p$? Higher SSIM = better reconstruction. The honesty-quality tradeoff: at high $\sigma$, the blur destroys too much information for accurate reconstruction (low SSIM), but the generator is more honest.
+
+\begin{edgecase}
+\textbf{Dynamic range:} If your images are normalized to $[-1, 1]$ (Tanh output), set \texttt{data\_range=2.0}. If normalized to $[0, 1]$, set \texttt{data\_range=1.0}. Getting this wrong gives meaningless SSIM values.
+\end{edgecase}
+
+% ----------------------------------------------------------------------
+\subsection{Dice Similarity Coefficient}
+% ----------------------------------------------------------------------
+
+\begin{definition}[Dice Score]
+For binary segmentation masks $P$ (prediction) and $G$ (ground truth):
+\begin{equation}
+    \text{Dice}(P, G) = \frac{2|P \cap G|}{|P| + |G|} = \frac{2 \text{TP}}{2\text{TP} + \text{FP} + \text{FN}}
+\end{equation}
+Dice $\in [0, 1]$, where 1 is perfect overlap. It is the harmonic mean of precision and recall.
+\end{definition}
+
+\textbf{In our context:} A U-Net is trained on synthetic pathological images from CycleGAN and evaluated on real BraTS data. Higher Dice from FB-CycleGAN synthetic data (vs.\ baseline) confirms that the frequency bottleneck improves downstream clinical utility.
+
+\begin{edgecase}
+\textbf{Multi-class Dice:} BraTS has three tumor sub-regions (ET, ED, NCR). Report Dice per class and the mean. Enhancing tumor (ET) is typically the hardest class---small, variable shape.
+
+\vspace{0.3em}
+\textbf{Empty predictions:} When both $P$ and $G$ are empty (true negative slice), Dice is undefined ($0/0$). Convention: set $\text{Dice} = 1.0$ for true negatives, $0.0$ otherwise.
+\end{edgecase}
+
+% ======================================================================
+\section{Forensic Evaluation: Steganographic Audit}
+% ======================================================================
+
+% ----------------------------------------------------------------------
+\subsection{FFT Residual Analysis}
+% ----------------------------------------------------------------------
+
+For each generated image $\hat{h} = G(p)$:
+\begin{enumerate}
+    \item Compute residual: $r = |\hat{h} - p|$
+    \item Apply windowing: $r_w = r \cdot w_{\text{Hann}}$ (to reduce spectral leakage)
+    \item Compute 2D FFT: $R = \text{FFT2}(r_w)$
+    \item Compute power spectrum: $S = |R|^2$
+    \item Shift zero-frequency to center: $S_c = \text{fftshift}(S)$
+    \item Compute radial average $P(\rho)$ and plot log-log
+    \item Average over many samples for statistical significance
+\end{enumerate}
+
+\textbf{What to look for:}
+\begin{itemize}
+    \item \textbf{Baseline CycleGAN:} Peaks or plateaus at high frequencies (steganographic encoding)
+    \item \textbf{FB-CycleGAN:} Steep rolloff at high frequencies, no structured peaks
+\end{itemize}
+
+% ----------------------------------------------------------------------
+\subsection{Perturbation Robustness Test}
+% ----------------------------------------------------------------------
+
+Inject additive Gaussian noise $\epsilon \sim \mathcal{N}(0, \sigma_\epsilon^2)$ into the generated image before feeding it to the reverse generator:
+\begin{equation}
+    \hat{p}_{\text{perturbed}} = F(\hat{h} + \epsilon)
+\end{equation}
+
+Measure the L1 reconstruction error $\|\hat{p}_{\text{perturbed}} - p\|_1$ as a function of $\sigma_\epsilon$.
+
+\begin{itemize}
+    \item \textbf{Steganographic generator:} Catastrophic degradation ($>50\%$ L1 increase) because the noise destroys the encoded information.
+    \item \textbf{Honest generator:} Graceful degradation because the reconstruction relies on visible structural features, not hidden signals.
+\end{itemize}
+
+\begin{edgecase}
+\textbf{Noise scale:} The perturbation $\sigma_\epsilon$ must be small enough that it wouldn't destroy visible features in a natural image, but large enough to destroy steganographic patterns. Start with $\sigma_\epsilon \in \{0.001, 0.005, 0.01, 0.02, 0.05\}$ and plot the degradation curve.
+\end{edgecase}
+
+% ----------------------------------------------------------------------
+\subsection{Classifier Leakage Test}
+% ----------------------------------------------------------------------
+
+Beyond spectral forensics, an \textbf{active adversarial test} provides direct evidence of information hiding.
+
+\begin{definition}[Classifier Leakage Test]
+Train a lightweight classifier (e.g., ResNet-18) on the generated ``healthy'' images $\hat{h} = G(p)$ to predict characteristics of the original pathological input $p$ (e.g., tumor presence, tumor size bin, or tumor location quadrant). If the classifier achieves accuracy significantly above chance, the generated images contain encoded information about the source---proof of steganography.
+\end{definition}
+
+\textbf{Protocol:}
+\begin{enumerate}
+    \item Generate healthy images $\hat{h} = G(p)$ for all pathological inputs $p$ in the test set.
+    \item Label each $\hat{h}$ with the original tumor characteristics (from the segmentation mask of $p$).
+    \item Train a ResNet-18 classifier: $\hat{h} \to \text{tumor property}$.
+    \item \textbf{Baseline CycleGAN:} Expect high accuracy (information is hidden in $\hat{h}$).
+    \item \textbf{FB-CycleGAN:} Expect accuracy $\approx$ random chance (information destroyed by blur).
+\end{enumerate}
+
+\begin{keyinsight}
+This test is more convincing than FFT analysis alone because it directly measures \textit{usable} hidden information rather than just spectral artifacts. A reviewer can look at your FFT plots and argue about whether the patterns are ``structured enough'' to constitute steganography. A classifier that can recover tumor location from ``healthy'' images is unambiguous proof.
+\end{keyinsight}
+
+\begin{edgecase}
+\textbf{What to classify:} Start with binary (tumor present vs.\ not)---but this is trivial since all $\hat{h}$ come from pathological inputs. Better targets:
+\begin{itemize}
+    \item Tumor \textbf{location} (which quadrant of the brain)
+    \item Tumor \textbf{size} (small/medium/large bins)
+    \item Tumor \textbf{type} (HGG vs.\ LGG)
+\end{itemize}
+If the classifier can recover \textit{any} of these from the ``healthy'' output, steganography is confirmed.
+
+\vspace{0.3em}
+\textbf{Train/test split:} Use the same patient-level split as your main experiment. The classifier must be evaluated on patients unseen during its own training.
+\end{edgecase}
+
+% ======================================================================
+\section{Training Practicalities}
+% ======================================================================
+
+% ----------------------------------------------------------------------
+\subsection{Optimization}
+% ----------------------------------------------------------------------
+
+\textbf{Standard CycleGAN training protocol:}
+\begin{itemize}
+    \item Optimizer: Adam with $\beta_1 = 0.5$, $\beta_2 = 0.999$ (lower $\beta_1$ than default reduces momentum, helpful for GAN stability)
+    \item Learning rate: $2 \times 10^{-4}$ for both $G$ and $D$
+    \item Schedule: constant for first 100 epochs, then linearly decay to 0 over next 100 epochs
+    \item Batch size: 1 (instance-level training, paired with InstanceNorm)
+\end{itemize}
+
+\begin{edgecase}
+\textbf{Separate optimizers:} CycleGAN uses separate optimizers for generators and discriminators. When updating generators, \textbf{do not} update discriminator weights, and vice versa. In PyTorch, this means calling \texttt{optimizer\_G.step()} and \texttt{optimizer\_D.step()} in separate backward passes, with appropriate \texttt{set\_requires\_grad()} calls to avoid unnecessary gradient computation.
+
+\vspace{0.3em}
+\textbf{Generator vs.\ discriminator update ratio:} Standard CycleGAN updates both once per iteration (1:1 ratio). If the discriminator dominates, consider updating $G$ more often (2:1 or 3:1).
+\end{edgecase}
+
+% ----------------------------------------------------------------------
+\subsection{Memory Management on T4/P100}
+% ----------------------------------------------------------------------
+
+\begin{center}
+\begin{tabular}{lrr}
+\toprule
+Component & Params & Memory (float32) \\
+\midrule
+Generator G ($1 \to 1$, ngf=64) & $\sim$11.4M & $\sim$43 MB \\
+Generator F ($1 \to 1$, ngf=64) & $\sim$11.4M & $\sim$43 MB \\
+Discriminator $D_H$ (ndf=64) & $\sim$2.8M & $\sim$11 MB \\
+Discriminator $D_P$ (ndf=64) & $\sim$2.8M & $\sim$11 MB \\
+\midrule
+\textbf{Total parameters} & $\sim$28.4M & $\sim$108 MB \\
+\midrule
+Activations (batch=1, 256$\times$256) & --- & $\sim$2--4 GB \\
+Optimizer states (Adam, 2$\times$) & --- & $\sim$216 MB \\
+\midrule
+\textbf{Total estimated} & & $\sim$3--5 GB \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+T4 has 16 GB, P100 has 16 GB. You have comfortable headroom at batch size 1.
+
+\begin{edgecase}
+\textbf{The cycle path doubles memory:} Computing $F(B(G(p)))$ requires keeping $G(p)$ and $B(G(p))$ in memory while $F$ runs. This means the full forward pass allocates activations for both generators simultaneously. Use \texttt{torch.cuda.empty\_cache()} between generator and discriminator updates if you see OOM.
+
+\vspace{0.3em}
+\textbf{Gradient accumulation for effective batch size:} If you want to simulate batch size $>1$ without OOM, accumulate gradients over multiple forward passes before calling \texttt{optimizer.step()}.
+\end{edgecase}
+
+% ======================================================================
+\section{Literature Review}
+\label{sec:litreview}
+% ======================================================================
+
+The proposal cites four foundational works. Here we survey additional literature organized by topic, highlighting works directly relevant to the FB-CycleGAN approach.
+
+% ----------------------------------------------------------------------
+\subsection{Steganography in CycleGAN}
+% ----------------------------------------------------------------------
+
+\textbf{Chu, Zhmoginov \& Sandler (2017)} first demonstrated that CycleGAN hides information steganographically, calling it ``a master of steganography.'' This was expanded by several follow-up works:
+
+\begin{itemize}
+    \item \textbf{Bashkirova, Usman \& Saenko (2019)} --- ``Adversarial Self-Defense for Cycle-Consistent GANs.'' \textit{NeurIPS 2019.} Proposed adversarial noise injection into the cycle path to prevent steganographic encoding. Most directly comparable approach to FB-CycleGAN (stochastic perturbation vs.\ our deterministic filtering).
+
+    \item \textbf{Zhang et al.\ (2019)} --- ``Harmonic Unpaired Image-to-Image Translation'' (HarmonicGAN) addressed the information hiding problem by explicitly penalizing high-frequency content in generated images. This is perhaps the closest prior work to FB-CycleGAN but uses a learnable spectral penalty rather than a fixed bottleneck.
+\end{itemize}
+
+% ----------------------------------------------------------------------
+\subsection{Frequency-Domain Analysis of GANs}
+% ----------------------------------------------------------------------
+
+\begin{itemize}
+    \item \textbf{Durall et al.\ (2020)} --- ``Watch Your Up-Convolution: CNN Based Generative Deep Neural Networks are Failing to Reproduce Spectral Distributions.'' \textit{CVPR 2020.} Showed that GAN-generated images have characteristic spectral artifacts (frequency dropoff). This is relevant because it means even ``honest'' generators will have spectral signatures.
+
+    \item \textbf{Dzanic et al.\ (2020)} --- ``Fourier Spectrum Discrepancies in Deep Network Generated Images.'' \textit{NeurIPS 2020.} Further characterized the spectral gap between real and generated images.
+
+    \item \textbf{Frank et al.\ (2020)} --- ``Leveraging Frequency Analysis for Deep Fake Image Recognition.'' \textit{ICML 2020.} Used spectral analysis to detect GAN-generated images---the same tools we use for steganographic forensics.
+
+    \item \textbf{Chandrasegaran et al.\ (2021)} --- ``A Closer Look at Fourier Spectrum Discrepancies for CNN-generated Images Detection.'' \textit{CVPR 2021.} Deeper analysis of why frequency artifacts arise from transposed convolutions.
+
+    \item \textbf{Rahaman et al.\ (2019)} --- ``On the Spectral Bias of Neural Networks.'' \textit{ICML 2019.} Foundational paper showing neural networks learn low-frequency components first. Provides theoretical backing for why a low-pass bottleneck still allows meaningful translation while blocking steganographic high-frequency encoding.
+
+    \item \textbf{Jiang et al.\ (2021)} --- ``Focal Frequency Loss for Image Reconstruction and Synthesis.'' \textit{ICCV 2021.} A loss function operating in the frequency domain to improve image generation quality. Could be combined with or compared against the fixed Gaussian bottleneck as a learnable alternative.
+\end{itemize}
+
+% ----------------------------------------------------------------------
+\subsection{Mitigating Information Hiding in Cycle-Consistent Models}
+% ----------------------------------------------------------------------
+
+\begin{itemize}
+    \item \textbf{Bashkirova, Usman \& Saenko (2019)} --- ``Adversarial Self-Defense for Cycle-Consistent GANs'' proposed adding noise to the translated image before the reverse cycle, forcing robustness. Similar motivation to our blur bottleneck but using stochastic perturbation rather than deterministic filtering.
+
+    \item \textbf{Li et al.\ (2020)} --- ``Noise-Aware CycleGAN'' introduced noise injection in the cycle path specifically to combat steganographic encoding, with analysis of how noise level affects generation quality.
+
+    \item \textbf{Kang et al.\ (2021)} --- ``SteganoGAN detection via frequency analysis'' provided forensic tools for detecting steganographic encoding in GAN outputs.
+
+    \item \textbf{Porav, Sherrat \& Newman (2019)} --- ``Reducing Steganography in Cycle-Consistency Loss.'' Directly addressed steganographic encoding in CycleGAN with frequency-aware regularization. \textbf{Critical citation} --- establishes that the problem space is studied.
+
+    \item \textbf{Baur et al.\ (2020)} --- ``SteGANomaly: Inhibiting CycleGAN Steganography for Unsupervised Anomaly Detection in Brain MRI.'' Applied steganography mitigation specifically to brain MRI anomaly detection. \textbf{Most directly related prior work.}
+
+    \item \textbf{Utz (2023)} --- Investigated frequency-domain constraints for preventing information hiding in cycle-consistent models. Relevant for positioning FB-CycleGAN's novelty.
+\end{itemize}
+
+% ----------------------------------------------------------------------
+\subsection{Medical Image Synthesis with GANs}
+% ----------------------------------------------------------------------
+
+\begin{itemize}
+    \item \textbf{Cohen, Luck \& Honari (2018)} --- Already cited. Showed that distribution matching losses hallucinate features in medical image translation---the foundational motivation for our work.
+
+    \item \textbf{Welander, Karlsson \& Eklund (2018)} --- ``Generative Adversarial Networks for Image-to-Image Translation on Multi-Contrast MR Images'' applied CycleGAN to brain MRI modality transfer (T1$\leftrightarrow$T2), demonstrating both successes and failure modes.
+
+    \item \textbf{Shin et al.\ (2018)} --- ``Medical Image Synthesis for Data Augmentation and Anonymization using Generative Adversarial Networks'' evaluated GANs for augmenting brain MRI datasets for segmentation training.
+
+    \item \textbf{Yu et al.\ (2019)} --- ``EA-GANs: Edge-Aware GANs for Cross-Modality MR Image Synthesis.'' \textit{IEEE TMI 2019.} Used edge-aware losses to preserve structural boundaries in brain MRI translation---relevant as an alternative approach to preserving pathology.
+
+    \item \textbf{Dar et al.\ (2019)} --- ``Image Synthesis in Multi-Contrast MRI with Conditional Generative Adversarial Networks.'' \textit{IEEE TMI 2019.} Conditional GAN methods for multi-contrast MRI synthesis; demonstrates the importance of faithful structural preservation in medical contexts.
+
+    \item \textbf{Armanious et al.\ (2020)} --- ``MedGAN: Medical Image Translation Using GANs.'' \textit{Computerized Medical Imaging and Graphics 2020.} CascadeNet-based medical image translation with perceptual loss; relevant comparison for non-cycle-consistent medical synthesis.
+\end{itemize}
+
+% ----------------------------------------------------------------------
+\subsection{Alternative Unpaired Translation Methods}
+% ----------------------------------------------------------------------
+
+These methods avoid or reformulate cycle-consistency, sidestepping the steganography problem by design. Important to discuss in related work and Q\&A.
+
+\begin{itemize}
+    \item \textbf{Park et al.\ (2020)} --- ``Contrastive Learning for Unpaired Image-to-Image Translation (CUT).'' \textit{ECCV 2020.} Replaces cycle-consistency with a contrastive loss that maximizes mutual information between corresponding patches. \textbf{Key comparison:} CUT has no reverse generator and no cycle path, so steganography cannot occur by construction. However, it also cannot enforce bidirectional consistency. Discuss why cycle-consistency is still desirable for medical imaging (bidirectional translation needed for data augmentation in both directions).
+
+    \item \textbf{Liu, Breuel \& Kautz (2017)} --- ``Unsupervised Image-to-Image Translation Networks (UNIT).'' \textit{NeurIPS 2017.} Assumes a shared latent space between domains. The shared encoder bottleneck limits information flow (similar spirit to our frequency bottleneck but in latent space rather than pixel space).
+
+    \item \textbf{Johnson, Alahi \& Fei-Fei (2016)} --- ``Perceptual Losses for Real-Time Style Transfer and Super-Resolution.'' \textit{ECCV 2016.} Foundational paper on perceptual (VGG feature-matching) loss. Often combined with GAN losses to reduce hallucination. The proposal mentions that existing mitigations ``rely on heavyweight auxiliary networks (VGG perceptual losses)''---this is the paper being referenced.
+\end{itemize}
+
+\begin{keyinsight}
+When asked ``why not just use CUT instead of CycleGAN + bottleneck?'', your answer: (1) CUT is one-directional by design---we need both P$\to$H and H$\to$P for data augmentation. (2) The cycle-consistency framework with our bottleneck gives us a principled knob ($\sigma$) to control the honesty-quality tradeoff. (3) Comparing baseline CycleGAN vs.\ FB-CycleGAN isolates the effect of the bottleneck, which is cleaner experimentally than comparing entirely different architectures.
+\end{keyinsight}
+
+% ----------------------------------------------------------------------
+\subsection{Technical Backbone}
+% ----------------------------------------------------------------------
+
+\begin{itemize}
+    \item \textbf{Goodfellow et al.\ (2014)} --- ``Generative Adversarial Networks.'' The original GAN paper.
+
+    \item \textbf{Mao et al.\ (2017)} --- ``Least Squares Generative Adversarial Networks.'' LSGAN objective used in CycleGAN.
+
+    \item \textbf{Isola et al.\ (2017)} --- ``Image-to-Image Translation with Conditional Adversarial Networks'' (pix2pix). Introduced PatchGAN discriminator used in CycleGAN.
+
+    \item \textbf{Ulyanov, Vedaldi \& Lempitsky (2016)} --- ``Instance Normalization: The Missing Ingredient for Fast Stylization.'' InstanceNorm is critical for style transfer quality.
+
+    \item \textbf{He et al.\ (2016)} --- ``Deep Residual Learning for Image Recognition.'' ResNet skip connections used in the generator.
+
+    \item \textbf{Ronneberger, Fischer \& Brox (2015)} --- ``U-Net: Convolutional Networks for Biomedical Image Segmentation.'' Architecture for downstream segmentation evaluation.
+
+    \item \textbf{Heusel et al.\ (2017)} --- ``GANs Trained by a Two Time-Scale Update Rule Converge to a Local Nash Equilibrium.'' \textit{NeurIPS 2017.} Introduced FID.
+
+    \item \textbf{Wang et al.\ (2004)} --- ``Image Quality Assessment: From Error Visibility to Structural Similarity.'' \textit{IEEE TIP 2004.} Introduced SSIM. Both FID and SSIM are primary evaluation metrics.
+
+    \item \textbf{Shrivastava et al.\ (2017)} --- ``Learning from Simulated and Unsupervised Images through Adversarial Training (SimGAN).'' \textit{CVPR 2017.} Introduced the image replay buffer technique adopted by CycleGAN for stabilizing discriminator training.
+\end{itemize}
+
+% ======================================================================
+\section{Statistical Rigor \& Experimental Design}
+% ======================================================================
+
+% ----------------------------------------------------------------------
+\subsection{Multiple Seeds and Reporting}
+% ----------------------------------------------------------------------
+
+Single-run results in deep learning are unreliable. GAN training is particularly sensitive to initialization and data ordering.
+
+\textbf{Mandatory protocol:}
+\begin{itemize}
+    \item Train each configuration across \textbf{at least 3 random seeds}
+    \item Report all metrics as $\text{Mean} \pm \text{Std}$ (e.g., ``FID: $42.3 \pm 1.7$'')
+    \item For the downstream U-Net evaluation: 3 seeds for U-Net training $\times$ each CycleGAN variant
+    \item Use statistical tests (paired $t$-test or Wilcoxon signed-rank) to claim one method is ``better'' than another
+\end{itemize}
+
+\begin{edgecase}
+\textbf{Seed management:} Set seeds for Python, NumPy, PyTorch, and CUDA. But note that some PyTorch operations are non-deterministic on GPU even with fixed seeds (e.g., \texttt{torch.nn.functional.interpolate} with \texttt{mode='bilinear'}). Set \texttt{torch.backends.cudnn.deterministic = True} and \texttt{torch.backends.cudnn.benchmark = False} for maximum reproducibility, but accept that perfect reproducibility across different hardware is not guaranteed.
+
+\vspace{0.3em}
+\textbf{Compute budget:} 3 seeds $\times$ (1 baseline + 5 sigma variants) $\times$ 200 epochs = 3600 training epochs total. On a T4 with 256$\times$256 single-channel images, estimate $\sim$2--5 min per epoch. Total: $\sim$120--300 GPU-hours. Plan accordingly with Kaggle/Colab time limits.
+\end{edgecase}
+
+% ----------------------------------------------------------------------
+\subsection{Novelty Framing for Presentation \& Report}
+% ----------------------------------------------------------------------
+
+Frequency-based steganography mitigation in GANs is \textbf{not} unstudied. Prior works include noise injection (Bashkirova et al., 2019), spectral penalties (HarmonicGAN, Zhang et al., 2019), and steganography-aware training (Porav et al., 2019; Baur et al., SteGANomaly, 2020; Utz, 2023).
+
+\textbf{Your actual novelty claims (defensible during Q\&A):}
+\begin{enumerate}
+    \item \textbf{Application context:} Applying a frequency bottleneck to the severe structural asymmetry of BraTS pathological $\leftrightarrow$ healthy brain MRI, where the steganographic incentive is strongest.
+    \item \textbf{Systematic $\sigma$ Pareto analysis:} Mapping the exact quantitative tradeoff between translation honesty and generation quality across multiple blur strengths---not just ``blur helps'' but ``here is the optimal operating point.''
+    \item \textbf{Dual-pronged forensic audit:} Combining spectral analysis (FFT residuals) with the classifier leakage test for rigorous steganography detection.
+    \item \textbf{Downstream clinical validation:} Showing that the bottleneck improves not just forensic metrics but actual segmentation performance on real data.
+\end{enumerate}
+
+\begin{edgecase}
+\textbf{During Q\&A:} If asked ``how is this different from just adding noise to the cycle path?'', the answer is: (1) Gaussian blur is deterministic and targets a specific frequency band, giving precise control via $\sigma$; noise injection is stochastic and affects all frequencies equally. (2) Blur preserves low-frequency structure exactly while destroying high-frequency content; noise degrades everything. (3) The Pareto sweep over $\sigma$ gives an interpretable honesty-quality curve; noise injection has no equivalent principled sweep.
+\end{edgecase}
+
+% ======================================================================
+\section{Summary: What Each Team Member Must Know}
+% ======================================================================
+
+\begin{center}
+\begin{tabular}{p{4cm}p{4cm}p{4cm}}
+\toprule
+\textbf{Models \& Architecture} & \textbf{Data \& Evaluation} & \textbf{Training \& Infra} \\
+\midrule
+ResNet-9 block structure & NIfTI parsing with nibabel & Adam optimizer ($\beta_1=0.5$) \\
+PatchGAN 70$\times$70 RF calc & Axial slice extraction & Linear LR decay schedule \\
+InstanceNorm (affine=True?) & Domain filtering (5\% threshold) & Replay buffer (pool=50) \\
+Transpose conv artifacts & Z-score normalization & Separate G/D optimizers \\
+Gaussian kernel math & FID (single-channel handling) & \texttt{set\_requires\_grad()} \\
+Frequency cutoff $\frac{1}{2\pi\sigma}$ & SSIM (data\_range!) & W\&B sweep logging \\
+Blur placement in cycle path & Dice (multi-class, edge cases) & Gradient accumulation \\
+\textbf{All:} Sections 2--3 of this doc & FFT residual + perturbation test & Memory budgeting \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\vspace{1em}
+
+\begin{tcolorbox}[colback=yellow!10!white, colframe=yellow!50!black, title=\textbf{Before Writing Code}]
+\begin{enumerate}
+    \item Every team member reads Sections 1--4 (mathematical foundations through evaluation)
+    \item Each person deep-dives into their column above
+    \item Run \texttt{scripts/analyze\_data.py} together so everyone sees the data
+    \item Discuss edge cases from this document as a group
+    \item Only then start implementing
+\end{enumerate}
+\end{tcolorbox}
+
+\end{document}
