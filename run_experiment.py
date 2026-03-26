@@ -33,6 +33,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Path to checkpoint file for evaluation or resuming training.",
     )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default=None,
+        help="Device override: 'cuda', 'cpu', 'cuda:0', etc. Defaults to config value.",
+    )
     return parser.parse_args()
 
 
@@ -44,6 +50,8 @@ def main() -> None:
     from src.utils import set_seed
 
     config = get_config(args.preset)
+    if args.device is not None:
+        config.device = args.device
     set_seed(config.seed)
 
     if args.eval_only:
