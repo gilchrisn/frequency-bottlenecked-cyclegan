@@ -183,7 +183,14 @@ def process_patient(
             if tumor_ratio > tumor_threshold:
                 label = "pathological"
             elif tumor_area == 0:
-                label = "healthy"
+                # Only accept healthy slices from top/bottom 20% of volume
+                # to avoid peritumoral edema and CSF artifacts near the tumor
+                frac = i / n_slices
+                if frac < 0.2 or frac > 0.8:
+                    label = "healthy"
+                else:
+                    counts["skipped"] += 1
+                    continue
             else:
                 counts["skipped"] += 1
                 continue
