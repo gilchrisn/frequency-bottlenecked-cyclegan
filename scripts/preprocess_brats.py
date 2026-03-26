@@ -155,12 +155,6 @@ def process_patient(
     )
     seg_vol = load_nifti(seg_files[0]) if seg_files else None
 
-    # Compute volume-level statistics on brain voxels
-    brain_mask = flair_vol > 0
-    brain_voxels = flair_vol[brain_mask]
-    vol_mean = float(brain_voxels.mean()) if brain_voxels.size > 0 else 0.0
-    vol_std = float(brain_voxels.std()) if brain_voxels.size > 0 else 1.0
-
     # Create output directories
     path_dir = output_dir / "pathological"
     health_dir = output_dir / "healthy"
@@ -183,6 +177,30 @@ def process_patient(
     has_tumor = tumor_z_max >= 0
     safe_z_min = tumor_z_min - healthy_margin  # healthy must be below this
     safe_z_max = tumor_z_max + healthy_margin  # healthy must be above this
+
+    # Compute intensity statistics from tumor-free slices only so that
+    # bright tumor voxels don't inflate vol_std and loosen the filter.
+    if has_tumor:
+        safe_slices = (
+            list(range(0, max(0, safe_z_min))) +
+            list(range(min(n_slices, safe_z_max + 1), n_slices))
+        )
+    else:
+        safe_slices = list(range(n_slices))
+
+    safe_voxels = np.concatenate([
+        flair_vol[:, :, i][flair_vol[:, :, i] > 0].ravel()
+        for i in safe_slices
+    ]) if safe_slices else np.array([])
+
+    if safe_voxels.size > 0:
+        vol_mean = float(safe_voxels.mean())
+        vol_std = float(safe_voxels.std()) if safe_voxels.std() > 1e-8 else 1.0
+    else:
+        # Fallback to whole-volume stats if no safe slices exist
+        brain_voxels = flair_vol[flair_vol > 0]
+        vol_mean = float(brain_voxels.mean()) if brain_voxels.size > 0 else 0.0
+        vol_std = float(brain_voxels.std()) if brain_voxels.size > 0 else 1.0
 
     for i in range(n_slices):
         flair_slice = flair_vol[:, :, i]
