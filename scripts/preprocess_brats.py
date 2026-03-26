@@ -114,7 +114,7 @@ def process_patient(
     output_dir: Path,
     target_size: int = 256,
     tumor_threshold: float = 0.01,
-    min_brain_area: int = 1000,
+    min_brain_area: int = 5000,
     healthy_margin: int = 15,
     max_bright_fraction: float = 0.02,
 ) -> dict[str, int]:
@@ -233,6 +233,17 @@ def process_patient(
                 if bright_fraction > max_bright_fraction:
                     counts["skipped"] += 1
                     continue
+                # Reject slices with k-space / motion striping artifacts:
+                # a corrupted scan has one axis varying much more than the other.
+                row_means = flair_slice.mean(axis=1)
+                col_means = flair_slice.mean(axis=0)
+                row_std = float(row_means.std())
+                col_std = float(col_means.std())
+                if row_std > 1e-8 and col_std > 1e-8:
+                    stripe_ratio = max(row_std / col_std, col_std / row_std)
+                    if stripe_ratio > 5.0:
+                        counts["skipped"] += 1
+                        continue
                 label = "healthy"
             else:
                 counts["skipped"] += 1
