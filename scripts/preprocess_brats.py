@@ -153,7 +153,10 @@ def process_patient(
     seg_files = list(patient_dir.glob("*_seg.nii.gz")) + list(
         patient_dir.glob("*_seg.nii")
     )
-    seg_vol = load_nifti(seg_files[0]) if seg_files else None
+    if not seg_files:
+        print(f"  No segmentation file found for {patient_id}, skipping.")
+        return {"pathological": 0, "healthy": 0, "skipped": 0}
+    seg_vol = load_nifti(seg_files[0])
 
     # Create output directories
     path_dir = output_dir / "pathological"
@@ -234,8 +237,6 @@ def process_patient(
             else:
                 counts["skipped"] += 1
                 continue
-        else:
-            label = "healthy"
 
         # Preprocess and save
         processed = preprocess_slice(flair_slice, vol_mean, vol_std, target_size)
