@@ -324,7 +324,7 @@ def main() -> None:
     parser.add_argument(
         "--min-brain-area",
         type=int,
-        default=1000,
+        default=5000,
         help="Minimum non-zero pixels to keep a slice.",
     )
     parser.add_argument(
