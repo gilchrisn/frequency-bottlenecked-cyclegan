@@ -3,6 +3,7 @@
 Loads preprocessed 2D .npy slices and pairs them in an unpaired fashion
 suitable for CycleGAN training.
 """
+from __future__ import annotations
 
 import json
 import random

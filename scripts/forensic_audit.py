@@ -22,6 +22,7 @@ Usage:
         --checkpoint-fb outputs/checkpoints/fb_cyclegan_sigma1/final.pt \
         --data-dir data/processed --output-dir outputs/forensics/comparison
 """
+from __future__ import annotations
 
 import argparse
 from pathlib import Path

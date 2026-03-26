@@ -39,6 +39,7 @@ Usage:
     python scripts/train_downstream.py --mode compare \
         --results-dir outputs/downstream
 """
+from __future__ import annotations
 
 import argparse
 import json

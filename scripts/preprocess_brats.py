@@ -4,6 +4,7 @@ Extracts axial FLAIR slices from BraTS 2020 volumes and classifies them as
 pathological (tumor present) or healthy (no tumor). Saves preprocessed slices
 as individual .npy files for efficient data loading during training.
 """
+from __future__ import annotations
 
 import argparse
 import json

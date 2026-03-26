@@ -14,6 +14,7 @@ the key mechanism for the downstream evaluation experiment:
   - Train on synthetic images from FB-CycleGAN → Dice_fb
   - Higher Dice_fb confirms FB-CycleGAN produces clinically useful images (H4).
 """
+from __future__ import annotations
 
 import json
 import random

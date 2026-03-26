@@ -4,6 +4,7 @@ Orchestrates the full training loop: generator and discriminator optimization,
 cycle-consistency enforcement, identity regularization, checkpointing,
 validation, and optional W&B logging.
 """
+from __future__ import annotations
 
 import os
 from pathlib import Path

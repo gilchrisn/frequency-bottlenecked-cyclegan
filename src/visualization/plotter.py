@@ -4,6 +4,7 @@ All functions save figures to disk and return the save path. They do NOT
 call plt.show(), so they are safe to use in non-interactive (server/Colab)
 environments.
 """
+from __future__ import annotations
 
 from pathlib import Path
 from typing import Optional

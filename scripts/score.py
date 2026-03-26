@@ -20,6 +20,7 @@ Usage:
         --data-dir data/processed \
         --output outputs/scores/fb_sigma1.json
 """
+from __future__ import annotations
 
 import argparse
 import json

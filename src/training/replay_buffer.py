@@ -3,6 +3,7 @@
 Stores previously generated images and returns a mix of new and buffered
 images, following Shrivastava et al. (2017).
 """
+from __future__ import annotations
 
 import random
 

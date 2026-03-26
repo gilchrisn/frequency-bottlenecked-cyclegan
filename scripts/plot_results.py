@@ -22,6 +22,7 @@ Usage:
         --pareto \
         --output-dir outputs/figures
 """
+from __future__ import annotations
 
 import argparse
 import json

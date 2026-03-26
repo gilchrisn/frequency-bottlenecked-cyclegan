@@ -18,6 +18,7 @@ Usage:
         --tumor-threshold 0.05 \
         --min-brain-area 1000
 """
+from __future__ import annotations
 
 import argparse
 from pathlib import Path
