@@ -15,7 +15,7 @@ Usage:
         --raw-dir data/raw \
         --processed-dir data/processed \
         --target-size 256 \
-        --tumor-threshold 0.05 \
+        --tumor-threshold 0.01 \
         --min-brain-area 1000
 """
 from __future__ import annotations
@@ -84,7 +84,7 @@ def process_patient_masks(
     patient_dir: Path,
     processed_dir: Path,
     target_size: int = 256,
-    tumor_threshold: float = 0.05,
+    tumor_threshold: float = 0.01,
     min_brain_area: int = 1000,
 ) -> int:
     """Extract mask .npy files for the pathological slices of one patient.
@@ -164,7 +164,7 @@ def main() -> None:
         help="Spatial dimension matching preprocessed images.",
     )
     parser.add_argument(
-        "--tumor-threshold", type=float, default=0.05,
+        "--tumor-threshold", type=float, default=0.01,
         help="Minimum tumor-to-brain ratio for pathological label.",
     )
     parser.add_argument(

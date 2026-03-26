@@ -64,7 +64,7 @@ class DataConfig:
     flip: bool = True
     num_workers: int = 4
     pin_memory: bool = True
-    tumor_area_threshold: float = 0.05
+    tumor_area_threshold: float = 0.01
     min_brain_area: int = 1000
     mri_sequence: str = "flair"
 

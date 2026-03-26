@@ -113,7 +113,7 @@ def process_patient(
     patient_dir: Path,
     output_dir: Path,
     target_size: int = 256,
-    tumor_threshold: float = 0.05,
+    tumor_threshold: float = 0.01,
     min_brain_area: int = 1000,
 ) -> dict[str, int]:
     """Process a single patient: extract and classify axial slices.
@@ -259,7 +259,7 @@ def main() -> None:
     parser.add_argument(
         "--tumor-threshold",
         type=float,
-        default=0.05,
+        default=0.01,
         help="Minimum tumor-to-brain ratio for pathological label.",
     )
     parser.add_argument(
