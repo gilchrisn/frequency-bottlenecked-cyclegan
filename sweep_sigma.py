@@ -60,8 +60,8 @@ def main() -> None:
 
         train_dataset = create_dataset(config.data, split="train")
         val_dataset = create_dataset(config.data, split="val")
-        train_loader = create_dataloader(train_dataset, config.train, shuffle=True)
-        val_loader = create_dataloader(val_dataset, config.train, shuffle=False)
+        train_loader = create_dataloader(train_dataset, config.data, config.train, split="train")
+        val_loader = create_dataloader(val_dataset, config.data, config.train, split="val")
 
         trainer = CycleGANTrainer(config)
         trainer.train(train_loader, val_loader)

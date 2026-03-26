@@ -38,6 +38,8 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.config import ExperimentConfig, ModelConfig
+from src.data.brats_dataset import BraTSDataset
+from src.data.transforms import get_val_transform
 from src.data import create_dataloader
 from src.models import create_generator
 
@@ -439,8 +441,14 @@ def main() -> None:
     cfg.train.batch_size = args.batch_size
     cfg.data.flip = False  # no augmentation at eval time
 
-    loader = create_dataloader(cfg.data, cfg.train, split=args.split, processed_dir=args.data_dir)
-    print(f"Loaded {args.split} split: {len(loader.dataset)} samples")
+    dataset = BraTSDataset(
+        config=cfg.data,
+        split=args.split,
+        transform=get_val_transform(cfg.data),
+        processed_dir=args.data_dir,
+    )
+    loader = create_dataloader(dataset, cfg.data, cfg.train, split=args.split)
+    print(f"Loaded {args.split} split: {len(dataset)} samples")
 
     # --- Noise levels for perturbation test ---
     noise_levels = [0.0, 0.01, 0.02, 0.05, 0.1, 0.15, 0.2, 0.3]

@@ -32,6 +32,8 @@ from torch.utils.data import DataLoader
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.config import ExperimentConfig, ModelConfig
+from src.data.brats_dataset import BraTSDataset
+from src.data.transforms import get_val_transform
 from src.data import create_dataloader
 from src.evaluation.metrics import compute_fid, compute_ssim
 from src.models import create_generator
@@ -95,7 +97,13 @@ def score_checkpoint(
     cfg.train.batch_size = batch_size
     cfg.data.flip = False
 
-    loader = create_dataloader(cfg.data, cfg.train, split=split, processed_dir=data_dir)
+    dataset = BraTSDataset(
+        config=cfg.data,
+        split=split,
+        transform=get_val_transform(cfg.data),
+        processed_dir=data_dir,
+    )
+    loader = create_dataloader(dataset, cfg.data, cfg.train, split=split)
 
     all_real_A = []
     all_real_B = []
