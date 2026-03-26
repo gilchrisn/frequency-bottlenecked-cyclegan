@@ -116,6 +116,7 @@ def process_patient(
     tumor_threshold: float = 0.01,
     min_brain_area: int = 1000,
     healthy_margin: int = 15,
+    max_bright_fraction: float = 0.02,
 ) -> dict[str, int]:
     """Process a single patient: extract and classify axial slices.
 
@@ -202,6 +203,13 @@ def process_patient(
             elif tumor_area == 0:
                 # Require at least healthy_margin slices from the tumor z-range
                 if has_tumor and safe_z_min <= i <= safe_z_max:
+                    counts["skipped"] += 1
+                    continue
+                # Reject slices with too many bright outlier pixels
+                # (CSF artifacts, vascular signal) that mimic tumor on FLAIR
+                brain_pixels = flair_slice[flair_slice > 0]
+                bright_fraction = np.mean(brain_pixels > vol_mean + 3.0 * vol_std)
+                if bright_fraction > max_bright_fraction:
                     counts["skipped"] += 1
                     continue
                 label = "healthy"
@@ -295,6 +303,12 @@ def main() -> None:
         default=15,
         help="Minimum slices between a healthy slice and the nearest tumor slice.",
     )
+    parser.add_argument(
+        "--max-bright-fraction",
+        type=float,
+        default=0.02,
+        help="Max fraction of brain pixels above 3 sigma before a healthy slice is rejected.",
+    )
     args = parser.parse_args()
 
     raw_dir = Path(args.raw_dir)
@@ -316,6 +330,7 @@ def main() -> None:
             tumor_threshold=args.tumor_threshold,
             min_brain_area=args.min_brain_area,
             healthy_margin=args.healthy_margin,
+            max_bright_fraction=args.max_bright_fraction,
         )
         for key in total_counts:
             total_counts[key] += counts[key]
