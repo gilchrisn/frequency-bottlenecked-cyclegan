@@ -62,6 +62,15 @@ class BraTSDataset(Dataset):
             self.processed_dir / "healthy", patient_ids
         )
 
+        # Cap each domain to max_samples_per_domain for training speed.
+        # Only applied to the train split; val/test use all slices.
+        cap = getattr(config, "max_samples_per_domain", 0)
+        if split == "train" and cap and cap > 0:
+            if len(self.paths_A) > cap:
+                self.paths_A = random.sample(self.paths_A, cap)
+            if len(self.paths_B) > cap:
+                self.paths_B = random.sample(self.paths_B, cap)
+
         if len(self.paths_A) == 0:
             raise RuntimeError(
                 f"No pathological slices found for split '{split}' "

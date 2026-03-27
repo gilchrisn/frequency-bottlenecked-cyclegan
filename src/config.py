@@ -40,14 +40,14 @@ class LossConfig:
 class TrainConfig:
     """Training hyperparameters and schedule."""
 
-    epochs: int = 200
-    batch_size: int = 1
+    epochs: int = 100
+    batch_size: int = 2
     lr_g: float = 2e-4
     lr_d: float = 2e-4
     beta1: float = 0.5
     beta2: float = 0.999
     lr_policy: str = "linear"
-    lr_decay_start: int = 100
+    lr_decay_start: int = 50
     pool_size: int = 50
     save_freq: int = 5
     log_freq: int = 100
@@ -67,6 +67,7 @@ class DataConfig:
     tumor_area_threshold: float = 0.01
     min_brain_area: int = 1000
     mri_sequence: str = "flair"
+    max_samples_per_domain: int = 5000
 
 
 @dataclass
