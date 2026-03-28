@@ -12,7 +12,7 @@ from typing import Optional
 
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from torchvision.utils import save_image
 from tqdm import tqdm
 
@@ -270,9 +270,21 @@ class CycleGANTrainer:
         self.G_AB.eval()
         self.G_BA.eval()
 
+        # Build a shuffled loader so visualisation samples are spread across
+        # patients, not just the first N sequential slices from one patient.
+        vis_loader = DataLoader(
+            Subset(
+                loader.dataset,
+                torch.randperm(len(loader.dataset))[:64].tolist(),
+            ),
+            batch_size=loader.batch_size or 1,
+            shuffle=False,
+            num_workers=0,
+        )
+
         # Collect exactly 8 samples, one per row, each row = [real_A | fake_B | real_B | fake_A]
         rows = []
-        for batch in loader:
+        for batch in vis_loader:
             if len(rows) >= 8:
                 break
             real_A = batch["A"].to(self.device)
