@@ -165,12 +165,24 @@ def score_checkpoint(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Score a CycleGAN checkpoint with FID and SSIM."
+        description="Score a CycleGAN checkpoint with FID and SSIM, or merge score JSONs."
+    )
+    parser.add_argument(
+        "--merge",
+        type=str,
+        nargs="+",
+        metavar="NAME=PATH",
+        default=None,
+        help=(
+            "Merge multiple score JSON files into one comparison file. "
+            "Provide pairs of NAME=PATH, e.g. "
+            "--merge baseline=outputs/scores/baseline.json fb=outputs/scores/fb_sigma1.json"
+        ),
     )
     parser.add_argument(
         "--checkpoint",
         type=str,
-        required=True,
+        default=None,
         help="Path to checkpoint .pt file.",
     )
     parser.add_argument(
@@ -210,6 +222,25 @@ def main() -> None:
         default="cuda" if torch.cuda.is_available() else "cpu",
     )
     args = parser.parse_args()
+
+    # --merge mode: combine existing score JSONs into one comparison file
+    if args.merge is not None:
+        merged = {}
+        for entry in args.merge:
+            if "=" not in entry:
+                parser.error(f"--merge entries must be NAME=PATH, got: {entry!r}")
+            name, path = entry.split("=", 1)
+            with open(path, "r") as f:
+                merged[name] = json.load(f)
+        output_path = Path(args.output) if args.output else Path("outputs/scores/comparison.json")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, "w") as f:
+            json.dump(merged, f, indent=2)
+        print(f"Merged {len(merged)} score files → {output_path}")
+        return
+
+    if args.checkpoint is None:
+        parser.error("--checkpoint is required unless --merge is used.")
 
     device = torch.device(args.device)
     print(f"Scoring: {args.checkpoint}")

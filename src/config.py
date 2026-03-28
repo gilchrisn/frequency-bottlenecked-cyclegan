@@ -41,6 +41,9 @@ class TrainConfig:
     """Training hyperparameters and schedule."""
 
     epochs: int = 100
+    # CycleGAN trains 4 networks simultaneously (2 generators + 2 discriminators),
+    # so batch_size=2 here is intentionally smaller than the batch_size=4 used
+    # in downstream U-Net training and inference scripts.
     batch_size: int = 2
     lr_g: float = 2e-4
     lr_d: float = 2e-4
