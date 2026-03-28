@@ -270,20 +270,24 @@ class CycleGANTrainer:
         self.G_AB.eval()
         self.G_BA.eval()
 
-        images = []
-        for i, batch in enumerate(loader):
-            if i >= 4:
+        # Collect exactly 8 samples, one per row, each row = [real_A | fake_B | real_B | fake_A]
+        rows = []
+        for batch in loader:
+            if len(rows) >= 8:
                 break
             real_A = batch["A"].to(self.device)
             real_B = batch["B"].to(self.device)
-
             fake_B = self.G_AB(real_A)
             fake_A = self.G_BA(real_B)
+            # Iterate per sample index so each row is semantically aligned
+            for i in range(real_A.size(0)):
+                if len(rows) >= 8:
+                    break
+                rows.append(torch.stack([real_A[i], fake_B[i], real_B[i], fake_A[i]]))
 
-            images.extend([real_A, fake_B, real_B, fake_A])
-
-        if images:
-            grid = torch.cat(images, dim=0)
+        if rows:
+            # rows is a list of (4, C, H, W) tensors → cat → (N*4, C, H, W)
+            grid = torch.cat(rows, dim=0)
             save_path = self.sample_dir / f"epoch_{epoch:04d}.png"
             save_image(grid, save_path, nrow=4, normalize=True, value_range=(-1, 1))
             self.logger.info("Saved validation samples to %s", save_path)
