@@ -3,6 +3,7 @@
 Finds NIfTI files in the raw data directory, groups by patient, lists
 available sequences, and prints summary statistics for a sample volume.
 """
+from __future__ import annotations
 
 from pathlib import Path
 

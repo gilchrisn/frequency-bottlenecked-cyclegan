@@ -4,6 +4,7 @@ Provides FID (Frechet Inception Distance) and SSIM (Structural Similarity)
 computation using torchmetrics, plus a convenience function to evaluate
 a full CycleGAN model on a dataloader.
 """
+from __future__ import annotations
 
 from typing import Any
 

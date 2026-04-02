@@ -40,15 +40,18 @@ class LossConfig:
 class TrainConfig:
     """Training hyperparameters and schedule."""
 
-    epochs: int = 200
-    batch_size: int = 8
-    compile_models: bool = True
+    epochs: int = 100
+    # CycleGAN trains 4 networks simultaneously (2 generators + 2 discriminators),
+    # so batch_size=2 here is intentionally smaller than the batch_size=4 used
+    # in downstream U-Net training and inference scripts.
+    batch_size: int = 2
+    compile_models: bool = False
     lr_g: float = 2e-4
     lr_d: float = 2e-4
     beta1: float = 0.5
     beta2: float = 0.999
     lr_policy: str = "linear"
-    lr_decay_start: int = 100
+    lr_decay_start: int = 50
     pool_size: int = 50
     save_freq: int = 5
     log_freq: int = 100
@@ -65,9 +68,10 @@ class DataConfig:
     flip: bool = True
     num_workers: int = 4
     pin_memory: bool = True
-    tumor_area_threshold: float = 0.05
+    tumor_area_threshold: float = 0.01
     min_brain_area: int = 1000
     mri_sequence: str = "flair"
+    max_samples_per_domain: int = 5000
 
 
 @dataclass

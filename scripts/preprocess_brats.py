@@ -4,6 +4,7 @@ Extracts axial FLAIR slices from BraTS 2020 volumes and classifies them as
 pathological (tumor present) or healthy (no tumor). Saves preprocessed slices
 as individual .npy files for efficient data loading during training.
 """
+from __future__ import annotations
 
 import argparse
 import json
@@ -112,22 +113,27 @@ def process_patient(
     patient_dir: Path,
     output_dir: Path,
     target_size: int = 256,
-    tumor_threshold: float = 0.05,
-    min_brain_area: int = 1000,
+    tumor_threshold: float = 0.01,
+    min_brain_area: int = 5000,
+    healthy_margin: int = 15,
+    max_bright_fraction: float = 0.02,
 ) -> dict[str, int]:
     """Process a single patient: extract and classify axial slices.
 
     Iterates over axial slices (axis 2) and classifies each as:
     - pathological: tumor occupies > tumor_threshold fraction of brain
-    - healthy: no tumor and brain area > min_brain_area pixels
-    - skip: otherwise (too little brain tissue)
+    - healthy: tumor_area == 0 AND at least healthy_margin slices away
+      from the nearest tumor-containing slice
+    - skip: otherwise
 
     Args:
         patient_dir: Directory containing the patient's NIfTI files.
         output_dir: Root output directory (data/processed).
         target_size: Output spatial dimension.
         tumor_threshold: Minimum tumor-to-brain ratio for pathological label.
-        min_brain_area: Minimum non-zero pixels to keep a healthy slice.
+        min_brain_area: Minimum non-zero pixels to keep a slice.
+        healthy_margin: Minimum number of slices between a healthy slice and
+            the nearest tumor-containing slice.
 
     Returns:
         Dict with counts: {"pathological": N, "healthy": M, "skipped": K}.
@@ -147,13 +153,10 @@ def process_patient(
     seg_files = list(patient_dir.glob("*_seg.nii.gz")) + list(
         patient_dir.glob("*_seg.nii")
     )
-    seg_vol = load_nifti(seg_files[0]) if seg_files else None
-
-    # Compute volume-level statistics on brain voxels
-    brain_mask = flair_vol > 0
-    brain_voxels = flair_vol[brain_mask]
-    vol_mean = float(brain_voxels.mean()) if brain_voxels.size > 0 else 0.0
-    vol_std = float(brain_voxels.std()) if brain_voxels.size > 0 else 1.0
+    if not seg_files:
+        print(f"  No segmentation file found for {patient_id}, skipping.")
+        return {"pathological": 0, "healthy": 0, "skipped": 0}
+    seg_vol = load_nifti(seg_files[0])
 
     # Create output directories
     path_dir = output_dir / "pathological"
@@ -165,6 +168,43 @@ def process_patient(
 
     # Iterate over axial slices (axis 2)
     n_slices = flair_vol.shape[2]
+
+    # Pre-compute the z-range of tumor presence with a safety margin buffer.
+    # Using min/max of tumor slices is sufficient since tumors are contiguous.
+    tumor_z_min, tumor_z_max = n_slices, -1
+    if seg_vol is not None:
+        for i in range(n_slices):
+            if np.any(seg_vol[:, :, i] > 0):
+                tumor_z_min = min(tumor_z_min, i)
+                tumor_z_max = max(tumor_z_max, i)
+    has_tumor = tumor_z_max >= 0
+    safe_z_min = tumor_z_min - healthy_margin  # healthy must be below this
+    safe_z_max = tumor_z_max + healthy_margin  # healthy must be above this
+
+    # Compute intensity statistics from tumor-free slices only so that
+    # bright tumor voxels don't inflate vol_std and loosen the filter.
+    if has_tumor:
+        safe_slices = (
+            list(range(0, max(0, safe_z_min))) +
+            list(range(min(n_slices, safe_z_max + 1), n_slices))
+        )
+    else:
+        safe_slices = list(range(n_slices))
+
+    safe_voxels = np.concatenate([
+        flair_vol[:, :, i][flair_vol[:, :, i] > 0].ravel()
+        for i in safe_slices
+    ]) if safe_slices else np.array([])
+
+    if safe_voxels.size > 0:
+        vol_mean = float(safe_voxels.mean())
+        vol_std = float(safe_voxels.std()) if safe_voxels.std() > 1e-8 else 1.0
+    else:
+        # Fallback to whole-volume stats if no safe slices exist
+        brain_voxels = flair_vol[flair_vol > 0]
+        vol_mean = float(brain_voxels.mean()) if brain_voxels.size > 0 else 0.0
+        vol_std = float(brain_voxels.std()) if brain_voxels.size > 0 else 1.0
+
     for i in range(n_slices):
         flair_slice = flair_vol[:, :, i]
         brain_area = np.sum(flair_slice > 0)
@@ -182,12 +222,32 @@ def process_patient(
             if tumor_ratio > tumor_threshold:
                 label = "pathological"
             elif tumor_area == 0:
+                # Require at least healthy_margin slices from the tumor z-range
+                if has_tumor and safe_z_min <= i <= safe_z_max:
+                    counts["skipped"] += 1
+                    continue
+                # Reject slices with too many bright outlier pixels
+                # (CSF artifacts, vascular signal) that mimic tumor on FLAIR
+                brain_pixels = flair_slice[flair_slice > 0]
+                bright_fraction = np.mean(brain_pixels > vol_mean + 3.0 * vol_std)
+                if bright_fraction > max_bright_fraction:
+                    counts["skipped"] += 1
+                    continue
+                # Reject slices with k-space / motion striping artifacts:
+                # a corrupted scan has one axis varying much more than the other.
+                row_means = flair_slice.mean(axis=1)
+                col_means = flair_slice.mean(axis=0)
+                row_std = float(row_means.std())
+                col_std = float(col_means.std())
+                if row_std > 1e-8 and col_std > 1e-8:
+                    stripe_ratio = max(row_std / col_std, col_std / row_std)
+                    if stripe_ratio > 5.0:
+                        counts["skipped"] += 1
+                        continue
                 label = "healthy"
             else:
                 counts["skipped"] += 1
                 continue
-        else:
-            label = "healthy"
 
         # Preprocess and save
         processed = preprocess_slice(flair_slice, vol_mean, vol_std, target_size)
@@ -258,14 +318,26 @@ def main() -> None:
     parser.add_argument(
         "--tumor-threshold",
         type=float,
-        default=0.05,
+        default=0.01,
         help="Minimum tumor-to-brain ratio for pathological label.",
     )
     parser.add_argument(
         "--min-brain-area",
         type=int,
-        default=1000,
+        default=5000,
         help="Minimum non-zero pixels to keep a slice.",
+    )
+    parser.add_argument(
+        "--healthy-margin",
+        type=int,
+        default=15,
+        help="Minimum slices between a healthy slice and the nearest tumor slice.",
+    )
+    parser.add_argument(
+        "--max-bright-fraction",
+        type=float,
+        default=0.02,
+        help="Max fraction of brain pixels above 3 sigma before a healthy slice is rejected.",
     )
     args = parser.parse_args()
 
@@ -287,6 +359,8 @@ def main() -> None:
             target_size=args.target_size,
             tumor_threshold=args.tumor_threshold,
             min_brain_area=args.min_brain_area,
+            healthy_margin=args.healthy_margin,
+            max_bright_fraction=args.max_bright_fraction,
         )
         for key in total_counts:
             total_counts[key] += counts[key]

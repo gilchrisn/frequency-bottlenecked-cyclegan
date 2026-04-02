@@ -4,6 +4,7 @@ Orchestrates the full training loop: generator and discriminator optimization,
 cycle-consistency enforcement, identity regularization, checkpointing,
 validation, and optional W&B logging.
 """
+from __future__ import annotations
 
 import os
 from pathlib import Path
@@ -11,7 +12,7 @@ from typing import Optional
 
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from torchvision.utils import save_image
 from tqdm import tqdm
 
@@ -281,22 +282,49 @@ class CycleGANTrainer:
         self.G_AB.eval()
         self.G_BA.eval()
 
-        images = []
-        for i, batch in enumerate(loader):
-            if i >= 4:
+        # Build a shuffled loader so visualisation samples are spread across
+        # patients, not just the first N sequential slices from one patient.
+        vis_loader = DataLoader(
+            Subset(
+                loader.dataset,
+                torch.randperm(len(loader.dataset))[:64].tolist(),
+            ),
+            batch_size=loader.batch_size or 1,
+            shuffle=False,
+            num_workers=0,
+        )
+
+        # Collect exactly 8 samples, one per row.
+        # Each row = [real_A | fake_B | rec_A | real_B | fake_A | rec_B]
+        #   real_A : real pathological input
+        #   fake_B : generated healthy  (G_AB)
+        #   rec_A  : reconstructed pathological (G_BA(fake_B)) — steganography evidence
+        #   real_B : real healthy input
+        #   fake_A : generated pathological (G_BA)
+        #   rec_B  : reconstructed healthy (G_AB(fake_A)) — steganography evidence
+        rows = []
+        for batch in vis_loader:
+            if len(rows) >= 8:
                 break
             real_A = batch["A"].to(self.device)
             real_B = batch["B"].to(self.device)
-
             fake_B = self.G_AB(real_A)
             fake_A = self.G_BA(real_B)
+            rec_A  = self.G_BA(self.bottleneck(fake_B))
+            rec_B  = self.G_AB(self.bottleneck(fake_A))
+            for i in range(real_A.size(0)):
+                if len(rows) >= 8:
+                    break
+                rows.append(torch.stack([
+                    real_A[i], fake_B[i], rec_A[i],
+                    real_B[i], fake_A[i], rec_B[i],
+                ]))
 
-            images.extend([real_A, fake_B, real_B, fake_A])
-
-        if images:
-            grid = torch.cat(images, dim=0)
+        if rows:
+            # rows is a list of (6, C, H, W) tensors → cat → (N*6, C, H, W)
+            grid = torch.cat(rows, dim=0)
             save_path = self.sample_dir / f"epoch_{epoch:04d}.png"
-            save_image(grid, save_path, nrow=4, normalize=True, value_range=(-1, 1))
+            save_image(grid, save_path, nrow=6, normalize=True, value_range=(-1, 1))
             self.logger.info("Saved validation samples to %s", save_path)
 
             if self.wandb_run is not None:

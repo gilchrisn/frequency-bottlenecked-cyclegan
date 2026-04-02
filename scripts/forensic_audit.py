@@ -1,14 +1,28 @@
-"""Steganographic forensic audit: FFT residual analysis + perturbation robustness.
+"""Forensic audit of steganographic encoding in CycleGAN generators.
 
-Produces:
-1. FFT power spectrum of residuals |G(x) - x| — structured high-freq = steganography
-2. Radially averaged power spectrum (1D curve) — bumps at high freq = hidden data
-3. Perturbation robustness test — inject noise before reverse cycle, measure degradation
+For each checkpoint provided, this script:
+  1. Generates translated images G_AB(real_A) on the test set.
+  2. Computes FFT power spectra of residuals |G_AB(real_A) - real_A| to reveal
+     any structured high-frequency content characteristic of steganographic encoding.
+  3. Runs a perturbation test: adds Gaussian noise to fake_B before the reverse
+     cycle G_BA(fake_B + eps). A steganographic generator degrades catastrophically;
+     a structurally honest one degrades gracefully.
+  4. Saves FFT heatmaps and perturbation curves. Compares two checkpoints
+     (typically baseline vs. FB-CycleGAN) when both are supplied.
 
 Usage:
-    python scripts/forensic_audit.py --checkpoint outputs/checkpoints/baseline/final.pt
-    python scripts/forensic_audit.py --checkpoint outputs/checkpoints/fb_sigma1/final.pt
+    # Single model
+    python scripts/forensic_audit.py \
+        --checkpoint outputs/checkpoints/baseline_cyclegan/final.pt \
+        --data-dir data/processed --output-dir outputs/forensics/baseline
+
+    # Comparison
+    python scripts/forensic_audit.py \
+        --checkpoint outputs/checkpoints/baseline_cyclegan/final.pt \
+        --checkpoint-fb outputs/checkpoints/fb_cyclegan_sigma1/final.pt \
+        --data-dir data/processed --output-dir outputs/forensics/comparison
 """
+from __future__ import annotations
 
 import argparse
 from pathlib import Path
@@ -16,22 +30,32 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
-from src.config import ExperimentConfig, TrainConfig, DataConfig
-from src.data import create_dataset
-from src.training import CycleGANTrainer
+# Ensure project root is on path when invoked directly
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from src.config import ExperimentConfig, ModelConfig
+from src.data.brats_dataset import BraTSDataset
+from src.data.transforms import get_val_transform
+from src.data import create_dataloader
+from src.models import create_generator
+
+
+# ---------------------------------------------------------------------------
+# Standalone FFT utilities (imported by pareto_analysis.py, generate_report_figures.py)
+# ---------------------------------------------------------------------------
 
 def compute_fft_power(residual: np.ndarray) -> np.ndarray:
     """Compute centered 2D FFT power spectrum of a residual image."""
-    # Hann window to reduce spectral leakage
     h, w = residual.shape
     win_h = np.hanning(h)
     win_w = np.hanning(w)
     window = np.outer(win_h, win_w)
     windowed = residual * window
-
     fft = np.fft.fft2(windowed)
     fft_shifted = np.fft.fftshift(fft)
     power = np.abs(fft_shifted) ** 2
@@ -46,242 +70,536 @@ def radial_average(power: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """
     h, w = power.shape
     cy, cx = h // 2, w // 2
-
     y, x = np.ogrid[:h, :w]
     r = np.sqrt((x - cx) ** 2 + (y - cy) ** 2).astype(int)
-
     max_r = min(cy, cx)
     radial_sum = np.zeros(max_r)
     radial_count = np.zeros(max_r)
-
     for ri in range(max_r):
         mask = r == ri
         radial_sum[ri] = power[mask].sum()
         radial_count[ri] = mask.sum()
-
     radial_count[radial_count == 0] = 1
     radial_mean = radial_sum / radial_count
-
-    freqs = np.arange(max_r) / max_r  # normalized frequency [0, 1]
+    freqs = np.arange(max_r) / max_r
     return freqs, radial_mean
 
 
-def run_fft_audit(trainer: CycleGANTrainer, loader: DataLoader,
-                  device: str, n_samples: int = 100) -> dict:
-    """Run FFT residual analysis on generated images.
+# ---------------------------------------------------------------------------
+# Checkpoint loading
+# ---------------------------------------------------------------------------
 
-    Returns dict with averaged power spectra and 2D power maps.
+def load_generators(checkpoint_path: str, device: torch.device):
+    """Load G_AB and G_BA from a saved checkpoint.
+
+    Args:
+        checkpoint_path: Path to the .pt checkpoint file.
+        device: Target device.
+
+    Returns:
+        Tuple of (G_AB, G_BA) PyTorch modules in eval mode.
     """
-    trainer.G_AB.eval()
-    trainer.G_BA.eval()
+    state = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
-    all_power_AB = []
-    all_power_BA = []
-    sample_residual_AB = None
+    # Reconstruct model config from checkpoint config dict if available
+    saved_cfg = state.get("config", {})
+    model_cfg_dict = saved_cfg.get("model", {}) if isinstance(saved_cfg, dict) else {}
 
-    with torch.no_grad():
-        for i, batch in enumerate(loader):
-            if i >= n_samples:
-                break
-            real_A = batch["A"].to(device)
-            real_B = batch["B"].to(device)
-
-            fake_B = trainer.G_AB(real_A)
-            fake_A = trainer.G_BA(real_B)
-
-            # Residuals
-            res_AB = (fake_B - real_A).abs().cpu().numpy()
-            res_BA = (fake_A - real_B).abs().cpu().numpy()
-
-            for b in range(res_AB.shape[0]):
-                power_AB = compute_fft_power(res_AB[b, 0])
-                power_BA = compute_fft_power(res_BA[b, 0])
-                all_power_AB.append(power_AB)
-                all_power_BA.append(power_BA)
-
-                if sample_residual_AB is None:
-                    sample_residual_AB = res_AB[b, 0]
-
-    # Average power spectra
-    avg_power_AB = np.mean(all_power_AB, axis=0)
-    avg_power_BA = np.mean(all_power_BA, axis=0)
-
-    freqs_AB, radial_AB = radial_average(avg_power_AB)
-    freqs_BA, radial_BA = radial_average(avg_power_BA)
-
-    return {
-        "avg_power_AB": avg_power_AB,
-        "avg_power_BA": avg_power_BA,
-        "freqs_AB": freqs_AB,
-        "radial_AB": radial_AB,
-        "freqs_BA": freqs_BA,
-        "radial_BA": radial_BA,
-        "sample_residual": sample_residual_AB,
-        "n_samples": len(all_power_AB),
-    }
-
-
-def run_perturbation_test(trainer: CycleGANTrainer, loader: DataLoader,
-                          device: str, noise_levels: list[float],
-                          n_samples: int = 50) -> dict:
-    """Test robustness to noise injection in the cycle path.
-
-    Steganographic model: catastrophic degradation.
-    Honest model: graceful degradation.
-    """
-    trainer.G_AB.eval()
-    trainer.G_BA.eval()
-
-    results = {sigma: [] for sigma in noise_levels}
-
-    with torch.no_grad():
-        for i, batch in enumerate(loader):
-            if i >= n_samples:
-                break
-            real_A = batch["A"].to(device)
-
-            fake_B = trainer.G_AB(real_A)
-
-            for sigma in noise_levels:
-                noise = torch.randn_like(fake_B) * sigma
-                perturbed = fake_B + noise
-                rec_A = trainer.G_BA(perturbed)
-                l1_error = (rec_A - real_A).abs().mean().item()
-                results[sigma].append(l1_error)
-
-    # Also compute clean reconstruction error as baseline
-    clean_errors = []
-    with torch.no_grad():
-        for i, batch in enumerate(loader):
-            if i >= n_samples:
-                break
-            real_A = batch["A"].to(device)
-            fake_B = trainer.G_AB(real_A)
-            rec_A = trainer.G_BA(fake_B)
-            clean_errors.append((rec_A - real_A).abs().mean().item())
-
-    return {
-        "noise_levels": noise_levels,
-        "mean_errors": {s: np.mean(v) for s, v in results.items()},
-        "std_errors": {s: np.std(v) for s, v in results.items()},
-        "clean_error": np.mean(clean_errors),
-    }
-
-
-def plot_audit(fft_results: dict, perturb_results: dict,
-               output_dir: Path, name: str) -> None:
-    """Generate all forensic audit plots."""
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    fig, axes = plt.subplots(2, 3, figsize=(18, 11))
-    fig.suptitle(f"Steganographic Forensic Audit — {name}", fontsize=14, y=1.02)
-
-    # 1. Sample residual image
-    ax = axes[0, 0]
-    ax.imshow(fft_results["sample_residual"], cmap="hot", vmin=0)
-    ax.set_title("Sample Residual |G(x) - x|")
-    ax.axis("off")
-
-    # 2. 2D FFT power spectrum (A->B)
-    ax = axes[0, 1]
-    power = fft_results["avg_power_AB"]
-    ax.imshow(np.log1p(power), cmap="inferno")
-    ax.set_title(f"Avg FFT Power Spectrum (Path->Healthy)\nn={fft_results['n_samples']} samples")
-    ax.axis("off")
-
-    # 3. 2D FFT power spectrum (B->A)
-    ax = axes[0, 2]
-    power = fft_results["avg_power_BA"]
-    ax.imshow(np.log1p(power), cmap="inferno")
-    ax.set_title("Avg FFT Power Spectrum (Healthy->Path)")
-    ax.axis("off")
-
-    # 4. Radial average (A->B) — log-log
-    ax = axes[1, 0]
-    freqs = fft_results["freqs_AB"]
-    radial = fft_results["radial_AB"]
-    mask = freqs > 0
-    ax.loglog(freqs[mask], radial[mask], linewidth=1.5)
-    ax.set_xlabel("Normalized Frequency")
-    ax.set_ylabel("Power")
-    ax.set_title("Radial Power Spectrum (Path->Healthy)\nBumps at high freq = steganography")
-    ax.grid(True, alpha=0.3)
-
-    # 5. Radial average (B->A) — log-log
-    ax = axes[1, 1]
-    freqs = fft_results["freqs_BA"]
-    radial = fft_results["radial_BA"]
-    mask = freqs > 0
-    ax.loglog(freqs[mask], radial[mask], linewidth=1.5)
-    ax.set_xlabel("Normalized Frequency")
-    ax.set_ylabel("Power")
-    ax.set_title("Radial Power Spectrum (Healthy->Path)")
-    ax.grid(True, alpha=0.3)
-
-    # 6. Perturbation robustness
-    ax = axes[1, 2]
-    sigmas = perturb_results["noise_levels"]
-    means = [perturb_results["mean_errors"][s] for s in sigmas]
-    stds = [perturb_results["std_errors"][s] for s in sigmas]
-    clean = perturb_results["clean_error"]
-
-    ax.errorbar(sigmas, means, yerr=stds, marker="o", capsize=4, linewidth=2)
-    ax.axhline(y=clean, color="green", linestyle="--", label=f"Clean: {clean:.4f}")
-    ax.set_xlabel("Noise sigma")
-    ax.set_ylabel("Mean L1 Reconstruction Error")
-    ax.set_title("Perturbation Robustness\nSteep rise = steganographic")
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-
-    plt.tight_layout()
-    save_path = output_dir / f"forensic_audit_{name}.png"
-    plt.savefig(save_path, dpi=150, bbox_inches="tight")
-    plt.close()
-    print(f"Saved: {save_path}")
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Steganographic forensic audit.")
-    parser.add_argument("--checkpoint", type=str, required=True)
-    parser.add_argument("--n-samples", type=int, default=100)
-    parser.add_argument("--output-dir", type=str, default="outputs/plots")
-    parser.add_argument("--name", type=str, default=None,
-                        help="Name for plots (default: inferred from checkpoint path)")
-    args = parser.parse_args()
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    # Infer name from checkpoint path
-    name = args.name or Path(args.checkpoint).parent.name
-
-    cfg = ExperimentConfig(
-        name=f"audit_{name}",
-        train=TrainConfig(compile_models=False),
-        data=DataConfig(num_workers=0),
-        use_wandb=False,
-        device=device,
+    model_cfg = ModelConfig(
+        input_channels=model_cfg_dict.get("input_channels", 1),
+        output_channels=model_cfg_dict.get("output_channels", 1),
+        ngf=model_cfg_dict.get("ngf", 64),
+        ndf=model_cfg_dict.get("ndf", 64),
+        norm_type=model_cfg_dict.get("norm_type", "instance"),
+        no_dropout=model_cfg_dict.get("no_dropout", True),
+        init_type=model_cfg_dict.get("init_type", "normal"),
+        init_gain=model_cfg_dict.get("init_gain", 0.02),
     )
 
-    trainer = CycleGANTrainer(cfg)
-    trainer.load_checkpoint(args.checkpoint)
+    G_AB = create_generator(model_cfg).to(device)
+    G_BA = create_generator(model_cfg).to(device)
+    G_AB.load_state_dict(state["G_AB"])
+    G_BA.load_state_dict(state["G_BA"])
+    G_AB.eval()
+    G_BA.eval()
+    return G_AB, G_BA
 
-    ds = create_dataset(cfg.data, "val")
-    loader = DataLoader(ds, batch_size=1, shuffle=False, num_workers=0)
 
-    print(f"Running FFT audit on {args.n_samples} samples...")
-    fft_results = run_fft_audit(trainer, loader, device, args.n_samples)
-    print(f"  Analyzed {fft_results['n_samples']} images")
+# ---------------------------------------------------------------------------
+# FFT analysis
+# ---------------------------------------------------------------------------
 
-    print("Running perturbation robustness test...")
-    noise_levels = [0.0, 0.001, 0.005, 0.01, 0.02, 0.05, 0.1]
-    perturb_results = run_perturbation_test(trainer, loader, device, noise_levels)
-    print(f"  Clean L1 error: {perturb_results['clean_error']:.4f}")
+def compute_fft_residual_spectrum(
+    generator_AB: torch.nn.Module,
+    loader: DataLoader,
+    device: torch.device,
+    max_batches: int = 200,
+) -> np.ndarray:
+    """Compute the mean 2D FFT power spectrum of translation residuals.
+
+    Residual = |G_AB(real_A) - real_A|. Structured high-frequency peaks in
+    the mean spectrum indicate steganographic encoding.
+
+    Args:
+        generator_AB: Trained generator (pathological -> healthy).
+        loader: DataLoader yielding {"A": tensor, "B": tensor}.
+        device: Torch device.
+        max_batches: Maximum number of batches to process.
+
+    Returns:
+        Mean log-power spectrum as 2D numpy array, shape (H, W).
+    """
+    accumulated_spectrum: np.ndarray | None = None
+    count = 0
+
+    with torch.no_grad():
+        for i, batch in enumerate(tqdm(loader, desc="FFT residuals", leave=False)):
+            if i >= max_batches:
+                break
+            real_A = batch["A"].to(device)
+            fake_B = generator_AB(real_A)
+
+            # Residual in [-2, 2] range (both in [-1, 1])
+            residual = (fake_B - real_A).abs()  # (B, 1, H, W)
+
+            for b in range(residual.shape[0]):
+                res_2d = residual[b, 0].cpu().numpy()  # (H, W)
+                # Shift zero-frequency to center
+                fft = np.fft.fftshift(np.fft.fft2(res_2d))
+                power = np.log1p(np.abs(fft) ** 2)
+
+                if accumulated_spectrum is None:
+                    accumulated_spectrum = power
+                else:
+                    accumulated_spectrum += power
+                count += 1
+
+    if accumulated_spectrum is None or count == 0:
+        raise RuntimeError("No images processed for FFT analysis.")
+
+    return accumulated_spectrum / count
+
+
+def radial_power_profile(spectrum_2d: np.ndarray, n_bins: int = 64) -> tuple:
+    """Compute radially-averaged power spectrum (rotationally averaged FFT).
+
+    Args:
+        spectrum_2d: 2D log-power spectrum array, shape (H, W).
+        n_bins: Number of radial frequency bins.
+
+    Returns:
+        Tuple of (frequencies, mean_power) arrays of length n_bins.
+    """
+    H, W = spectrum_2d.shape
+    cy, cx = H // 2, W // 2
+
+    # Distance from center for every pixel
+    y_idx, x_idx = np.ogrid[:H, :W]
+    dist = np.hypot(y_idx - cy, x_idx - cx).ravel()
+    power_flat = spectrum_2d.ravel()
+
+    max_dist = min(cy, cx)
+    edges = np.linspace(0, max_dist, n_bins + 1)
+    bin_means = []
+    bin_centers = []
+
+    for j in range(n_bins):
+        mask = (dist >= edges[j]) & (dist < edges[j + 1])
+        if mask.sum() > 0:
+            bin_means.append(power_flat[mask].mean())
+        else:
+            bin_means.append(0.0)
+        bin_centers.append((edges[j] + edges[j + 1]) / 2.0)
+
+    return np.array(bin_centers) / max_dist, np.array(bin_means)
+
+
+# ---------------------------------------------------------------------------
+# Perturbation test
+# ---------------------------------------------------------------------------
+
+def perturbation_test(
+    generator_AB: torch.nn.Module,
+    generator_BA: torch.nn.Module,
+    loader: DataLoader,
+    device: torch.device,
+    noise_levels: list[float],
+    max_batches: int = 50,
+) -> dict[float, float]:
+    """Measure cycle-reconstruction degradation under injected noise.
+
+    For each noise level sigma_eps, compute:
+        clean_l1  = ||G_BA(fake_B) - real_A||_1
+        noisy_l1  = ||G_BA(fake_B + eps) - real_A||_1   (eps ~ N(0, sigma_eps^2))
+        ratio     = noisy_l1 / clean_l1
+
+    A steganographic generator has ratio >> 1 (catastrophic failure).
+    A structurally honest generator has ratio ≈ 1 (graceful degradation).
+
+    Args:
+        generator_AB: G_AB (pathological -> healthy).
+        generator_BA: G_BA (healthy -> pathological).
+        loader: DataLoader.
+        device: Torch device.
+        noise_levels: List of sigma_eps values to test.
+        max_batches: Maximum batches per noise level.
+
+    Returns:
+        Dict mapping sigma_eps -> mean ratio.
+    """
+    results: dict[float, float] = {}
+
+    with torch.no_grad():
+        for sigma_eps in tqdm(noise_levels, desc="Perturbation test"):
+            clean_l1_sum = 0.0
+            noisy_l1_sum = 0.0
+            n = 0
+
+            for i, batch in enumerate(loader):
+                if i >= max_batches:
+                    break
+                real_A = batch["A"].to(device)
+                fake_B = generator_AB(real_A)
+
+                # Clean cycle
+                rec_A_clean = generator_BA(fake_B)
+                clean_l1 = F.l1_loss(rec_A_clean, real_A, reduction="mean").item()
+
+                # Noisy cycle
+                noise = torch.randn_like(fake_B) * sigma_eps
+                rec_A_noisy = generator_BA(fake_B + noise)
+                noisy_l1 = F.l1_loss(rec_A_noisy, real_A, reduction="mean").item()
+
+                clean_l1_sum += clean_l1
+                noisy_l1_sum += noisy_l1
+                n += 1
+
+            if n > 0 and clean_l1_sum > 1e-9:
+                results[sigma_eps] = noisy_l1_sum / clean_l1_sum
+            else:
+                results[sigma_eps] = 1.0
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Plotting
+# ---------------------------------------------------------------------------
+
+def plot_fft_spectrum(
+    spectrum: np.ndarray,
+    title: str,
+    save_path: Path,
+    vmin: float | None = None,
+    vmax: float | None = None,
+) -> None:
+    """Save a 2D FFT power spectrum as a heatmap.
+
+    Args:
+        spectrum: 2D numpy array (log-power).
+        title: Plot title.
+        save_path: Output file path (.png).
+        vmin: Colormap minimum (auto if None).
+        vmax: Colormap maximum (auto if None).
+    """
+    fig, ax = plt.subplots(figsize=(5, 5))
+    im = ax.imshow(spectrum, cmap="inferno", vmin=vmin, vmax=vmax)
+    ax.set_title(title)
+    ax.axis("off")
+    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_radial_profiles(
+    profiles: dict[str, tuple[np.ndarray, np.ndarray]],
+    save_path: Path,
+) -> None:
+    """Plot radially-averaged power spectra for multiple models.
+
+    Args:
+        profiles: Dict mapping label -> (frequencies, mean_power).
+        save_path: Output file path.
+    """
+    fig, ax = plt.subplots(figsize=(7, 4))
+    for label, (freqs, power) in profiles.items():
+        ax.plot(freqs, power, label=label, linewidth=1.5)
+
+    ax.set_xlabel("Normalized Radial Frequency")
+    ax.set_ylabel("Mean Log Power")
+    ax.set_title("Radial Power Spectrum of Translation Residuals")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_perturbation_curves(
+    curves: dict[str, dict[float, float]],
+    save_path: Path,
+) -> None:
+    """Plot perturbation test L1 ratio curves for multiple models.
+
+    Args:
+        curves: Dict mapping label -> {sigma_eps -> ratio}.
+        save_path: Output file path.
+    """
+    fig, ax = plt.subplots(figsize=(7, 4))
+    for label, data in curves.items():
+        sigmas = sorted(data.keys())
+        ratios = [data[s] for s in sigmas]
+        ax.plot(sigmas, ratios, marker="o", label=label, linewidth=1.5)
+
+    ax.axhline(y=1.0, color="gray", linestyle="--", alpha=0.6, label="No degradation")
+    ax.set_xlabel("Injected Noise σ")
+    ax.set_ylabel("L1 Ratio (noisy / clean)")
+    ax.set_title("Cycle Reconstruction Degradation Under Perturbation\n(steganographic models spike; honest models stay near 1.0)")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_comparison_spectra(
+    spec_baseline: np.ndarray,
+    spec_fb: np.ndarray,
+    labels: tuple[str, str],
+    save_path: Path,
+) -> None:
+    """Side-by-side FFT heatmap comparison.
+
+    Args:
+        spec_baseline: 2D spectrum for baseline model.
+        spec_fb: 2D spectrum for FB-CycleGAN model.
+        labels: Tuple of (baseline_label, fb_label).
+        save_path: Output file path.
+    """
+    vmin = min(spec_baseline.min(), spec_fb.min())
+    vmax = max(spec_baseline.max(), spec_fb.max())
+
+    fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+    for ax, spec, label in zip(axes, [spec_baseline, spec_fb], labels):
+        im = ax.imshow(spec, cmap="inferno", vmin=vmin, vmax=vmax)
+        ax.set_title(label)
+        ax.axis("off")
+        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+    fig.suptitle("Mean FFT Power Spectrum of Translation Residuals", fontsize=13)
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    """Run forensic audit."""
+    parser = argparse.ArgumentParser(
+        description="Forensic FFT + perturbation audit for CycleGAN checkpoints."
+    )
+    parser.add_argument(
+        "--checkpoint",
+        type=str,
+        required=True,
+        help="Path to primary (e.g., baseline) checkpoint .pt file.",
+    )
+    parser.add_argument(
+        "--checkpoint-fb",
+        type=str,
+        default=None,
+        help="Optional path to FB-CycleGAN checkpoint for comparison.",
+    )
+    parser.add_argument(
+        "--data-dir",
+        type=str,
+        default="data/processed",
+        help="Path to preprocessed data directory (containing split.json).",
+    )
+    parser.add_argument(
+        "--split",
+        type=str,
+        default="test",
+        choices=["train", "val", "test"],
+        help="Dataset split to audit.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default="outputs/forensics",
+        help="Directory to save audit results.",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=4,
+        help="Batch size for image generation.",
+    )
+    parser.add_argument(
+        "--max-batches",
+        type=int,
+        default=200,
+        help="Maximum batches to process for FFT analysis.",
+    )
+    parser.add_argument(
+        "--perturbation-batches",
+        type=int,
+        default=50,
+        help="Maximum batches per noise level for perturbation test.",
+    )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="cuda" if torch.cuda.is_available() else "cpu",
+    )
+    parser.add_argument(
+        "--label",
+        type=str,
+        default="Baseline CycleGAN",
+        help="Display label for primary checkpoint.",
+    )
+    parser.add_argument(
+        "--label-fb",
+        type=str,
+        default="FB-CycleGAN",
+        help="Display label for FB-CycleGAN checkpoint.",
+    )
+    args = parser.parse_args()
+
+    device = torch.device(args.device)
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"Device: {device}")
+    print(f"Output: {output_dir}")
+
+    # Build a minimal config for the dataloader
+    cfg = ExperimentConfig()
+    cfg.train.batch_size = args.batch_size
+    cfg.data.flip = False  # no augmentation at eval time
+
+    dataset = BraTSDataset(
+        config=cfg.data,
+        split=args.split,
+        transform=get_val_transform(cfg.data),
+        processed_dir=args.data_dir,
+    )
+    loader = create_dataloader(dataset, cfg.data, cfg.train, split=args.split)
+    print(f"Loaded {args.split} split: {len(dataset)} samples")
+
+    # --- Noise levels for perturbation test ---
+    noise_levels = [0.0, 0.01, 0.02, 0.05, 0.1, 0.15, 0.2, 0.3]
+
+    # -----------------------------------------------------------------------
+    # Audit primary checkpoint
+    # -----------------------------------------------------------------------
+    print(f"\n=== Auditing: {args.checkpoint} ===")
+    G_AB_base, G_BA_base = load_generators(args.checkpoint, device)
+
+    spec_base = compute_fft_residual_spectrum(G_AB_base, loader, device, args.max_batches)
+    radial_base = radial_power_profile(spec_base)
+    pert_base = perturbation_test(
+        G_AB_base, G_BA_base, loader, device, noise_levels, args.perturbation_batches
+    )
+
+    # Save individual FFT heatmap
+    plot_fft_spectrum(
+        spec_base,
+        title=f"FFT Residual Spectrum — {args.label}",
+        save_path=output_dir / "fft_spectrum_baseline.png",
+    )
+    print(f"  Saved FFT spectrum: {output_dir / 'fft_spectrum_baseline.png'}")
+
+    # -----------------------------------------------------------------------
+    # Audit FB-CycleGAN checkpoint (optional)
+    # -----------------------------------------------------------------------
+    spec_fb = None
+    radial_fb = None
+    pert_fb = None
+
+    if args.checkpoint_fb is not None:
+        print(f"\n=== Auditing: {args.checkpoint_fb} ===")
+        G_AB_fb, G_BA_fb = load_generators(args.checkpoint_fb, device)
+
+        spec_fb = compute_fft_residual_spectrum(G_AB_fb, loader, device, args.max_batches)
+        radial_fb = radial_power_profile(spec_fb)
+        pert_fb = perturbation_test(
+            G_AB_fb, G_BA_fb, loader, device, noise_levels, args.perturbation_batches
+        )
+
+        plot_fft_spectrum(
+            spec_fb,
+            title=f"FFT Residual Spectrum — {args.label_fb}",
+            save_path=output_dir / "fft_spectrum_fb.png",
+        )
+        print(f"  Saved FFT spectrum: {output_dir / 'fft_spectrum_fb.png'}")
+
+        # Side-by-side comparison
+        plot_comparison_spectra(
+            spec_base,
+            spec_fb,
+            labels=(args.label, args.label_fb),
+            save_path=output_dir / "fft_comparison.png",
+        )
+        print(f"  Saved comparison: {output_dir / 'fft_comparison.png'}")
+
+    # -----------------------------------------------------------------------
+    # Radial power profiles
+    # -----------------------------------------------------------------------
+    profiles: dict[str, tuple] = {args.label: radial_base}
+    if radial_fb is not None:
+        profiles[args.label_fb] = radial_fb
+
+    plot_radial_profiles(profiles, save_path=output_dir / "radial_power_profiles.png")
+    print(f"Saved radial profiles: {output_dir / 'radial_power_profiles.png'}")
+
+    # -----------------------------------------------------------------------
+    # Perturbation curves
+    # -----------------------------------------------------------------------
+    pert_curves: dict[str, dict[float, float]] = {args.label: pert_base}
+    if pert_fb is not None:
+        pert_curves[args.label_fb] = pert_fb
+
+    plot_perturbation_curves(pert_curves, save_path=output_dir / "perturbation_curves.png")
+    print(f"Saved perturbation curves: {output_dir / 'perturbation_curves.png'}")
+
+    # -----------------------------------------------------------------------
+    # Print summary
+    # -----------------------------------------------------------------------
+    print("\n--- Perturbation Test Summary ---")
+    print(f"{'Noise σ':>10}", end="")
+    for label in pert_curves:
+        print(f"  {label:>25}", end="")
+    print()
     for sigma in noise_levels:
-        print(f"  sigma={sigma}: L1={perturb_results['mean_errors'][sigma]:.4f}")
+        print(f"{sigma:>10.3f}", end="")
+        for label in pert_curves:
+            ratio = pert_curves[label].get(sigma, float("nan"))
+            print(f"  {ratio:>25.4f}", end="")
+        print()
 
-    print("Generating plots...")
-    plot_audit(fft_results, perturb_results, Path(args.output_dir), name)
-    print("Done.")
+    # Check H1 hypothesis: ratio at sigma=0.1 vs sigma=0.0
+    sigma_test = 0.1
+    base_ratio = pert_base.get(sigma_test, 1.0)
+    print(f"\nH1 check — {args.label} ratio at σ={sigma_test}: {base_ratio:.4f}")
+    if base_ratio > 1.5:
+        print("  ✓ Ratio > 1.5: consistent with steganographic encoding (H1 confirmed)")
+    else:
+        print("  ✗ Ratio ≤ 1.5: no strong evidence of steganographic encoding")
+
+    if pert_fb is not None:
+        fb_ratio = pert_fb.get(sigma_test, 1.0)
+        print(f"H2 check — {args.label_fb} ratio at σ={sigma_test}: {fb_ratio:.4f}")
+        if fb_ratio < base_ratio:
+            print("  ✓ FB-CycleGAN more robust than baseline (H2 consistent)")
+        else:
+            print("  ✗ FB-CycleGAN not more robust (unexpected)")
+
+    print(f"\nAll outputs saved to: {output_dir}")
 
 
 if __name__ == "__main__":

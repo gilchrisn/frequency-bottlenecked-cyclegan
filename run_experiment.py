@@ -33,6 +33,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Path to checkpoint file for evaluation or resuming training.",
     )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default=None,
+        help="Device override: 'cuda', 'cpu', 'cuda:0', etc. Defaults to config value.",
+    )
     return parser.parse_args()
 
 
@@ -44,6 +50,8 @@ def main() -> None:
     from src.utils import set_seed
 
     config = get_config(args.preset)
+    if args.device is not None:
+        config.device = args.device
     set_seed(config.seed)
 
     if args.eval_only:
@@ -51,12 +59,18 @@ def main() -> None:
             print("Error: --checkpoint is required with --eval-only.")
             sys.exit(1)
 
+        from src.data import create_dataset, create_dataloader
         from src.training import CycleGANTrainer
         from src.evaluation import evaluate_model
+        import torch
 
         trainer = CycleGANTrainer(config)
         trainer.load_checkpoint(args.checkpoint)
-        results = evaluate_model(trainer, config)
+
+        test_dataset = create_dataset(config.data, split="test")
+        test_loader = create_dataloader(test_dataset, config.data, config.train, split="test")
+        device = torch.device(config.device)
+        results = evaluate_model(trainer.G_AB, trainer.G_BA, test_loader, config, device)
         print("Evaluation results:")
         for metric, value in results.items():
             print(f"  {metric}: {value:.4f}")
@@ -66,8 +80,8 @@ def main() -> None:
 
         train_dataset = create_dataset(config.data, split="train")
         val_dataset = create_dataset(config.data, split="val")
-        train_loader = create_dataloader(train_dataset, config.train, shuffle=True)
-        val_loader = create_dataloader(val_dataset, config.train, shuffle=False)
+        train_loader = create_dataloader(train_dataset, config.data, config.train, split="train")
+        val_loader = create_dataloader(val_dataset, config.data, config.train, split="val")
 
         trainer = CycleGANTrainer(config)
         trainer.train(train_loader, val_loader)
