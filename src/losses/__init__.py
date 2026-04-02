@@ -15,6 +15,8 @@ from src.losses.bottleneck import (
     IdentityBottleneck,
     create_bottleneck,
 )
+from src.losses.ideal_lowpass import IdealLowPassBottleneck
+from src.losses.svd_bottleneck import SVDBottleneck
 from src.losses.cycle import CycleConsistencyLoss
 from src.losses.identity import IdentityLoss
 

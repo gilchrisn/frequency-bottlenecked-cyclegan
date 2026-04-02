@@ -32,8 +32,16 @@ class LossConfig:
     lambda_cycle: float = 10.0
     lambda_identity: float = 0.5
     use_frequency_bottleneck: bool = False
+    bottleneck_type: str = "gaussian"  # gaussian | ideal_lowpass | svd | autoencoder
     blur_kernel_size: int = 5
     blur_sigma: float = 1.0
+    # Ideal low-pass specific
+    lowpass_cutoff: float = 0.15       # normalized frequency cutoff [0, 1]
+    # SVD specific
+    svd_rank: int = 50                 # number of singular values to keep
+    # Autoencoder specific
+    ae_latent_dim: int = 256           # autoencoder bottleneck dimension
+    ae_checkpoint: str = ""            # path to pretrained AE checkpoint
 
 
 @dataclass
@@ -119,15 +127,61 @@ def _make_fb_preset(sigma: float) -> ExperimentConfig:
 
 
 PRESETS: Dict[str, ExperimentConfig] = {
+    # --- Baseline (no bottleneck) ---
     "baseline_cyclegan": ExperimentConfig(
         name="baseline_cyclegan",
         loss=LossConfig(use_frequency_bottleneck=False),
     ),
+    # --- Gaussian blur variants ---
     "fb_cyclegan_sigma0.5": _make_fb_preset(0.5),
     "fb_cyclegan_sigma1": _make_fb_preset(1.0),
     "fb_cyclegan_sigma1.5": _make_fb_preset(1.5),
     "fb_cyclegan_sigma2": _make_fb_preset(2.0),
     "fb_cyclegan_sigma3": _make_fb_preset(3.0),
+    # --- Ideal low-pass (hard frequency cutoff) ---
+    "fb_ideal_lowpass_0.15": ExperimentConfig(
+        name="fb_ideal_lowpass_0.15",
+        loss=LossConfig(
+            use_frequency_bottleneck=True,
+            bottleneck_type="ideal_lowpass",
+            lowpass_cutoff=0.15,
+        ),
+    ),
+    "fb_ideal_lowpass_0.25": ExperimentConfig(
+        name="fb_ideal_lowpass_0.25",
+        loss=LossConfig(
+            use_frequency_bottleneck=True,
+            bottleneck_type="ideal_lowpass",
+            lowpass_cutoff=0.25,
+        ),
+    ),
+    # --- SVD truncation ---
+    "fb_svd_rank50": ExperimentConfig(
+        name="fb_svd_rank50",
+        loss=LossConfig(
+            use_frequency_bottleneck=True,
+            bottleneck_type="svd",
+            svd_rank=50,
+        ),
+    ),
+    "fb_svd_rank100": ExperimentConfig(
+        name="fb_svd_rank100",
+        loss=LossConfig(
+            use_frequency_bottleneck=True,
+            bottleneck_type="svd",
+            svd_rank=100,
+        ),
+    ),
+    # --- Autoencoder bottleneck ---
+    "fb_autoencoder": ExperimentConfig(
+        name="fb_autoencoder",
+        loss=LossConfig(
+            use_frequency_bottleneck=True,
+            bottleneck_type="autoencoder",
+            ae_checkpoint="outputs/checkpoints/ae_pretrained.pt",
+            ae_latent_dim=256,
+        ),
+    ),
 }
 
 

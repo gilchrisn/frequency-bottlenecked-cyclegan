@@ -111,12 +111,39 @@ def create_bottleneck(config: LossConfig) -> nn.Module:
         config: Loss configuration with bottleneck settings.
 
     Returns:
-        FrequencyBottleneck if use_frequency_bottleneck is True,
-        otherwise IdentityBottleneck.
+        Bottleneck module based on config.bottleneck_type.
+        Returns IdentityBottleneck if use_frequency_bottleneck is False.
+
+    Supported bottleneck_type values:
+        - "gaussian": Fixed Gaussian blur (default)
+        - "ideal_lowpass": Hard frequency cutoff in FFT domain
+        - "svd": Rank-k SVD truncation
+        - "autoencoder": Pretrained frozen autoencoder
     """
-    if config.use_frequency_bottleneck:
+    if not config.use_frequency_bottleneck:
+        return IdentityBottleneck()
+
+    btype = config.bottleneck_type
+
+    if btype == "gaussian":
         return FrequencyBottleneck(
             kernel_size=config.blur_kernel_size,
             sigma=config.blur_sigma,
         )
-    return IdentityBottleneck()
+    elif btype == "ideal_lowpass":
+        from src.losses.ideal_lowpass import IdealLowPassBottleneck
+        return IdealLowPassBottleneck(cutoff=config.lowpass_cutoff)
+    elif btype == "svd":
+        from src.losses.svd_bottleneck import SVDBottleneck
+        return SVDBottleneck(rank=config.svd_rank)
+    elif btype == "autoencoder":
+        from src.losses.ae_bottleneck import AutoencoderBottleneck
+        return AutoencoderBottleneck(
+            checkpoint_path=config.ae_checkpoint,
+            latent_dim=config.ae_latent_dim,
+        )
+    else:
+        raise ValueError(
+            f"Unknown bottleneck_type '{btype}'. "
+            "Supported: gaussian, ideal_lowpass, svd, autoencoder"
+        )
