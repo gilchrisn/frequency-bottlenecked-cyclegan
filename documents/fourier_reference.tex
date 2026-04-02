@@ -1,0 +1,536 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{mathtools}
+\usepackage{bm}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{tcolorbox}
+\usepackage{fancyhdr}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!70!black,
+    urlcolor=blue!60!black
+}
+
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}[section]
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{proof_}{Proof}[section]
+\newtheorem{remark}{Remark}[section]
+
+\newtcolorbox{intuition}{
+    colback=blue!5!white,
+    colframe=blue!50!black,
+    title=Geometric Intuition,
+    fonttitle=\bfseries
+}
+
+\newtcolorbox{application}{
+    colback=green!5!white,
+    colframe=green!50!black,
+    title=Application to FB-CycleGAN,
+    fonttitle=\bfseries
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small Fourier Analysis Reference}
+\fancyhead[R]{\small CS424 FB-CycleGAN}
+\fancyfoot[C]{\thepage}
+
+\title{\textbf{Fourier Analysis from First Principles} \\[0.5em]
+\Large A Self-Contained Reference for Signal and Image Analysis}
+\author{CS424 Group Project --- Internal Reference}
+\date{March 2026}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+% ======================================================================
+\section{Complex Numbers as 2D Objects}
+% ======================================================================
+
+Before Fourier analysis, we need to be precise about complex numbers.
+
+\begin{definition}[Complex Number]
+A complex number $z = a + bi$ where $a, b \in \mathbb{R}$ and $i = \sqrt{-1}$ is a point in the 2D \textbf{complex plane}:
+\begin{itemize}
+    \item The \textbf{real part} $\mathrm{Re}(z) = a$ is the $x$-coordinate.
+    \item The \textbf{imaginary part} $\mathrm{Im}(z) = b$ is the $y$-coordinate.
+    \item The \textbf{modulus} $|z| = \sqrt{a^2 + b^2}$ is the distance from the origin.
+    \item The \textbf{conjugate} $\overline{z} = a - bi$ reflects across the real axis.
+\end{itemize}
+\end{definition}
+
+\begin{definition}[Euler's Formula]
+\begin{equation}
+    e^{i\theta} = \cos\theta + i\sin\theta
+\end{equation}
+This maps the angle $\theta$ to a point on the unit circle in the complex plane. As $\theta$ increases from $0$ to $2\pi$, $e^{i\theta}$ traces the full unit circle:
+\begin{align}
+    \theta = 0 &\implies e^{i \cdot 0} = 1 + 0i = (1, 0) \quad\text{(right)} \\
+    \theta = \pi/2 &\implies e^{i\pi/2} = 0 + 1 \cdot i = (0, 1) \quad\text{(top)} \\
+    \theta = \pi &\implies e^{i\pi} = -1 + 0i = (-1, 0) \quad\text{(left)} \\
+    \theta = 3\pi/2 &\implies e^{i3\pi/2} = 0 - 1 \cdot i = (0, -1) \quad\text{(bottom)}
+\end{align}
+\end{definition}
+
+\begin{definition}[Complex Exponential at Frequency $k$]
+The function $e^{ikt}$ traces the unit circle $k$ times as $t$ goes from $0$ to $2\pi$:
+\begin{itemize}
+    \item $k = 1$: one full loop (slow spin)
+    \item $k = 3$: three full loops (fast spin)
+    \item $k = -2$: two loops in the opposite direction
+\end{itemize}
+Its real part is $\cos(kt)$ and its imaginary part is $\sin(kt)$, so $e^{ikt}$ packages a cosine and sine at frequency $k$ into one object.
+\end{definition}
+
+% ======================================================================
+\section{Function Spaces and Inner Products}
+% ======================================================================
+
+\begin{definition}[$L^2$ Space]
+$L^2([0, 2\pi])$ is the set of all square-integrable functions on $[0, 2\pi]$:
+\begin{equation}
+    L^2([0, 2\pi]) = \left\{ f : [0, 2\pi] \to \mathbb{C} \;\middle|\; \int_0^{2\pi} |f(t)|^2 \, dt < \infty \right\}
+\end{equation}
+This is a vector space: you can add functions and scale them, and the results are still in $L^2$.
+\end{definition}
+
+\begin{definition}[Inner Product on $L^2$]
+For $f, g \in L^2([0, 2\pi])$:
+\begin{equation}
+    \langle f, g \rangle = \frac{1}{2\pi} \int_0^{2\pi} f(t) \, \overline{g(t)} \, dt
+\end{equation}
+The $\frac{1}{2\pi}$ is a normalisation constant so that $\langle e^{ikt}, e^{ikt} \rangle = 1$.
+\end{definition}
+
+\begin{remark}[Why Divide by $2\pi$?]
+Without it, $\langle e^{ikt}, e^{ikt} \rangle = \int_0^{2\pi} |e^{ikt}|^2 \, dt = \int_0^{2\pi} 1 \, dt = 2\pi$. We divide by $2\pi$ to make the basis vectors unit length. This is a normalisation convention---some texts put $\frac{1}{\sqrt{2\pi}}$ on both the forward and inverse transforms instead. The choice doesn't matter as long as it's consistent.
+\end{remark}
+
+\subsection{Inner Product as Projection}
+
+In $\mathbb{R}^2$, the dot product $\langle \mathbf{v}, \mathbf{u} \rangle$ where $\mathbf{u}$ is a unit vector gives the length of $\mathbf{v}$'s shadow (projection) onto $\mathbf{u}$:
+\begin{equation}
+    \mathbf{v} = (3, 4), \quad \mathbf{e}_1 = (1, 0) \quad\implies\quad \langle \mathbf{v}, \mathbf{e}_1 \rangle = 3 \cdot 1 + 4 \cdot 0 = 3
+\end{equation}
+The result $3$ is the component of $\mathbf{v}$ along $\mathbf{e}_1$.
+
+The $L^2$ inner product does exactly the same thing for functions. $\langle f, e^{ikt} \rangle$ measures how much of $f$ ``points in the direction'' of $e^{ikt}$---i.e., how much of frequency $k$ is present in $f$.
+
+% ======================================================================
+\section{Orthonormality of the Exponential Basis}
+% ======================================================================
+
+\begin{theorem}[Orthonormality]
+The functions $\{e_k(t) = e^{ikt}\}_{k \in \mathbb{Z}}$ are orthonormal in $L^2([0, 2\pi])$:
+\begin{equation}
+    \langle e_k, e_m \rangle = \begin{cases} 1 & \text{if } k = m \\ 0 & \text{if } k \neq m \end{cases}
+\end{equation}
+\end{theorem}
+
+\textbf{Proof.} Compute directly:
+\begin{equation}
+    \langle e_k, e_m \rangle = \frac{1}{2\pi} \int_0^{2\pi} e^{ikt} \cdot \overline{e^{imt}} \, dt = \frac{1}{2\pi} \int_0^{2\pi} e^{ikt} \cdot e^{-imt} \, dt = \frac{1}{2\pi} \int_0^{2\pi} e^{i(k-m)t} \, dt
+\end{equation}
+
+\textbf{Case $k = m$:} The exponent is $0$, so $e^{i \cdot 0 \cdot t} = 1$:
+\begin{equation}
+    \frac{1}{2\pi} \int_0^{2\pi} 1 \, dt = \frac{2\pi}{2\pi} = 1 \quad\checkmark
+\end{equation}
+
+\textbf{Case $k \neq m$:} Let $p = k - m \neq 0$. By Euler's formula, $e^{ipt} = \cos(pt) + i\sin(pt)$:
+\begin{align}
+    \int_0^{2\pi} e^{ipt} \, dt &= \int_0^{2\pi} \cos(pt) \, dt + i \int_0^{2\pi} \sin(pt) \, dt
+\end{align}
+Since $p$ is a nonzero integer, both $\cos(pt)$ and $\sin(pt)$ complete full cycles on $[0, 2\pi]$. The integral of any full cycle of sine or cosine is zero (the positive half cancels the negative half):
+\begin{align}
+    \int_0^{2\pi} \cos(pt) \, dt &= \left[\frac{\sin(pt)}{p}\right]_0^{2\pi} = \frac{\sin(2\pi p) - \sin(0)}{p} = 0 \\
+    \int_0^{2\pi} \sin(pt) \, dt &= \left[\frac{-\cos(pt)}{p}\right]_0^{2\pi} = \frac{-\cos(2\pi p) + \cos(0)}{p} = \frac{-1+1}{p} = 0
+\end{align}
+Therefore $\langle e_k, e_m \rangle = 0$ when $k \neq m$. $\square$
+
+\begin{intuition}
+Two sinusoids at different integer frequencies always cancel over a full period. If you multiply $\cos(2t)$ by $\cos(3t)$ and integrate, the product oscillates symmetrically around zero. Only when the frequencies match does the product $|e^{ikt}|^2 = 1$ stay positive everywhere.
+\end{intuition}
+
+% ======================================================================
+\section{The Fourier Transform}
+% ======================================================================
+
+\subsection{Fourier Coefficients = Projections onto the Basis}
+
+\begin{definition}[Fourier Coefficient]
+For $f \in L^2([0, 2\pi])$, the $k$-th Fourier coefficient is the projection of $f$ onto the basis function $e_k$:
+\begin{equation}
+    \hat{f}[k] = \langle f, e_k \rangle = \frac{1}{2\pi} \int_0^{2\pi} f(t) \, e^{-ikt} \, dt
+\end{equation}
+\end{definition}
+
+\begin{intuition}
+The $e^{-ikt}$ factor ``wraps'' the signal around the origin at speed $k$ (the minus sign reverses the direction). The integral computes the centre of mass of the wrapped signal. If $f$ contains a component at frequency $k$, the peaks consistently land on one side of the circle, pulling the centre of mass away from the origin. If not, the peaks cancel, and $\hat{f}[k] \approx 0$.
+
+This is precisely the 3Blue1Brown visualisation.
+\end{intuition}
+
+\subsection{Reconstruction (Inverse Fourier Transform)}
+
+\begin{theorem}[Fourier Series]
+Any $f \in L^2([0, 2\pi])$ can be reconstructed from its coefficients:
+\begin{equation}
+    f(t) = \sum_{k=-\infty}^{\infty} \hat{f}[k] \, e^{ikt}
+\end{equation}
+\end{theorem}
+
+\textbf{Derivation.} Assume $f$ can be expanded as $f(t) = \sum_k c_k \, e^{ikt}$. To find $c_m$, take the inner product of both sides with $e_m$:
+\begin{align}
+    \langle f, e_m \rangle &= \left\langle \sum_k c_k \, e_k, \; e_m \right\rangle \\
+    &= \sum_k c_k \, \langle e_k, e_m \rangle \quad\text{(linearity of inner product)} \\
+    &= c_m \cdot 1 + \sum_{k \neq m} c_k \cdot 0 \quad\text{(orthonormality)} \\
+    &= c_m
+\end{align}
+So $c_m = \langle f, e_m \rangle = \hat{f}[m]$. The forward transform extracts coefficients; the inverse sums them back. $\square$
+
+\begin{remark}
+This is identical to how in $\mathbb{R}^3$, if $\mathbf{v} = a\mathbf{e}_1 + b\mathbf{e}_2 + c\mathbf{e}_3$, then $a = \langle \mathbf{v}, \mathbf{e}_1 \rangle$. The only difference is that $L^2$ is infinite-dimensional.
+\end{remark}
+
+% ======================================================================
+\section{The Discrete Fourier Transform (DFT)}
+% ======================================================================
+
+For a finite signal of $N$ samples (e.g., $N = 256$ pixels), the function space is $\mathbb{C}^N$---an ordinary finite-dimensional vector space.
+
+\begin{definition}[DFT]
+For a signal $f = (f[0], f[1], \ldots, f[N-1]) \in \mathbb{C}^N$:
+\begin{equation}
+    \hat{f}[k] = \sum_{n=0}^{N-1} f[n] \cdot e^{-i \, 2\pi \, kn / N}, \qquad k = 0, 1, \ldots, N-1
+\end{equation}
+\end{definition}
+
+\begin{definition}[Inverse DFT]
+\begin{equation}
+    f[n] = \frac{1}{N} \sum_{k=0}^{N-1} \hat{f}[k] \cdot e^{+i \, 2\pi \, kn / N}, \qquad n = 0, 1, \ldots, N-1
+\end{equation}
+\end{definition}
+
+\begin{remark}[DFT as Matrix Multiplication]
+The DFT is a linear map $\mathbb{C}^N \to \mathbb{C}^N$ represented by the matrix $\mathbf{W}$ where:
+\begin{equation}
+    W_{kn} = e^{-i \, 2\pi \, kn / N}
+\end{equation}
+Then $\hat{\mathbf{f}} = \mathbf{W} \mathbf{f}$. The matrix $\frac{1}{\sqrt{N}} \mathbf{W}$ is unitary ($\mathbf{W}^* \mathbf{W} = N \cdot \mathbf{I}$).
+\end{remark}
+
+\subsection{Why the DFT Matrix is Unitary}
+
+The columns of $\frac{1}{\sqrt{N}}\mathbf{W}$ are the vectors:
+\begin{equation}
+    \mathbf{w}_n = \frac{1}{\sqrt{N}} \left(1, \; e^{-i2\pi n/N}, \; e^{-i2\pi \cdot 2n/N}, \; \ldots, \; e^{-i2\pi(N-1)n/N}\right)
+\end{equation}
+
+Their inner product:
+\begin{equation}
+    \langle \mathbf{w}_n, \mathbf{w}_m \rangle = \frac{1}{N} \sum_{k=0}^{N-1} e^{-i2\pi k(n-m)/N}
+\end{equation}
+
+When $n = m$: every term is $1$, sum is $N$, result is $1$.
+
+When $n \neq m$: this is a geometric series summing $N$-th roots of unity. The $N$-th roots of unity are evenly spaced around the unit circle and cancel to zero:
+\begin{equation}
+    \sum_{k=0}^{N-1} \left(e^{-i2\pi(n-m)/N}\right)^k = \frac{1 - e^{-i2\pi(n-m)}}{1 - e^{-i2\pi(n-m)/N}} = \frac{1 - 1}{1 - e^{-i2\pi(n-m)/N}} = 0
+\end{equation}
+
+Therefore the columns are orthonormal, $\mathbf{W}$ is unitary (up to scaling), and the DFT is a length-preserving change of basis. No information is lost.
+
+\begin{remark}[Unitary $\neq$ Rotation]
+A unitary matrix satisfies $\mathbf{U}^*\mathbf{U} = \mathbf{I}$, which means it preserves lengths and angles. This includes both rotations ($\det = +1$) and reflections ($\det = -1$). The precise statement is: the DFT is a \textbf{unitary change of basis} from the standard (pixel) basis to the frequency basis.
+\end{remark}
+
+% ======================================================================
+\section{2D Fourier Transform (for Images)}
+% ======================================================================
+
+\begin{definition}[2D DFT]
+For an image $f[m, n]$ of size $M \times N$:
+\begin{equation}
+    \hat{f}[u, v] = \sum_{m=0}^{M-1} \sum_{n=0}^{N-1} f[m, n] \cdot e^{-i2\pi\left(\frac{um}{M} + \frac{vn}{N}\right)}
+\end{equation}
+\end{definition}
+
+\subsection{Why $e^{i(kx + ly)}$?}
+
+The 2D basis functions are tensor products of 1D basis functions:
+\begin{equation}
+    e_{k,l}(x, y) = e^{ikx} \cdot e^{ily} = e^{i(kx + ly)}
+\end{equation}
+
+The last equality uses the exponential property $e^{a+b} = e^a \cdot e^b$.
+
+\begin{itemize}
+    \item $e^{ikx}$ oscillates $k$ times in the $x$ direction (constant along $y$)
+    \item $e^{ily}$ oscillates $l$ times in the $y$ direction (constant along $x$)
+    \item Their product oscillates in both directions simultaneously, producing stripes at angle $\arctan(l/k)$ with frequency $\sqrt{k^2 + l^2}$
+\end{itemize}
+
+This is a \textbf{tensor product} construction: if $\{e_k(x)\}$ is a basis for functions of $x$, and $\{e_l(y)\}$ is a basis for functions of $y$, then $\{e_k(x) \cdot e_l(y)\}$ is a basis for functions of $(x, y)$.
+
+\begin{intuition}
+Every image is a sum of 2D striped patterns at different frequencies, orientations, and intensities:
+\begin{itemize}
+    \item Low-frequency stripes ($k, l$ small): large smooth regions (brain shape, overall brightness)
+    \item Mid-frequency stripes: medium structures (brain folds, organ boundaries)
+    \item High-frequency stripes ($k, l$ large): fine detail (edges, texture, noise)
+\end{itemize}
+\end{intuition}
+
+\subsection{Power Spectrum and Radial Average}
+
+\begin{definition}[Power Spectrum]
+\begin{equation}
+    P[u,v] = |\hat{f}[u,v]|^2 = \mathrm{Re}(\hat{f}[u,v])^2 + \mathrm{Im}(\hat{f}[u,v])^2
+\end{equation}
+This discards the phase (position of stripes) and keeps only how much energy is at each frequency.
+\end{definition}
+
+\begin{definition}[Radial Average]
+To collapse the 2D spectrum to 1D:
+\begin{equation}
+    P(\rho) = \frac{1}{|\{(u,v) : \sqrt{u^2+v^2} = \rho\}|} \sum_{\sqrt{u^2+v^2} = \rho} P[u,v]
+\end{equation}
+This averages over all orientations at frequency $\rho$, giving a single curve: spatial frequency vs.\ power.
+\end{definition}
+
+% ======================================================================
+\section{Convolution}
+% ======================================================================
+
+\begin{definition}[Convolution (Continuous)]
+\begin{equation}
+    (f * g)(t) = \int_{-\infty}^{\infty} f(s) \cdot g(t - s) \, ds
+\end{equation}
+\end{definition}
+
+\begin{definition}[Convolution (Discrete)]
+\begin{equation}
+    (f * g)[n] = \sum_{m=0}^{N-1} f[m] \cdot g[n - m]
+\end{equation}
+\end{definition}
+
+\begin{intuition}
+Convolution slides the kernel $g$ across the signal $f$. At each position $t$, it computes the overlap---the integral (or sum) of the product. The result is a weighted average where $g$ defines the weighting pattern.
+
+Gaussian blur is convolution where $g$ is a bell curve. Each pixel becomes a weighted average of its neighbours, with nearby pixels weighted more heavily.
+\end{intuition}
+
+% ======================================================================
+\section{Convolution Theorem}
+% ======================================================================
+
+\begin{theorem}[Convolution Theorem]
+Convolution in the spatial domain becomes pointwise multiplication in the frequency domain:
+\begin{equation}
+    \widehat{f * g}[k] = \hat{f}[k] \cdot \hat{g}[k]
+\end{equation}
+\end{theorem}
+
+\textbf{Proof.} Start from the Fourier transform of the convolution:
+\begin{equation}
+    \widehat{f * g}[k] = \int (f * g)(t) \cdot e^{-ikt} \, dt
+\end{equation}
+
+Expand the convolution:
+\begin{equation}
+    = \int_t \left[ \int_s f(s) \cdot g(t - s) \, ds \right] e^{-ikt} \, dt
+\end{equation}
+
+Swap the order of integration (Fubini's theorem---valid because $f, g \in L^1$ or $L^2$; for finite signals this is just swapping finite sums, which is always valid):
+\begin{equation}
+    = \int_s f(s) \left[ \int_t g(t - s) \cdot e^{-ikt} \, dt \right] ds
+\end{equation}
+
+For the inner integral, substitute $u = t - s$, so $t = u + s$ and $dt = du$ (since $s$ is a constant with respect to $t$, shifting by a constant doesn't change the differential):
+\begin{align}
+    \int_t g(t-s) \cdot e^{-ikt} \, dt &= \int_u g(u) \cdot e^{-ik(u+s)} \, du \\
+    &= \int_u g(u) \cdot e^{-iku} \cdot e^{-iks} \, du \\
+    &= e^{-iks} \int_u g(u) \cdot e^{-iku} \, du \\
+    &= e^{-iks} \cdot \hat{g}[k]
+\end{align}
+
+The key step: $e^{-ik(u+s)} = e^{-iku} \cdot e^{-iks}$ (exponential property), and $e^{-iks}$ doesn't depend on $u$ so it factors out. The remaining integral is the Fourier transform of $g$.
+
+Substitute back:
+\begin{align}
+    \widehat{f * g}[k] &= \int_s f(s) \cdot e^{-iks} \cdot \hat{g}[k] \, ds \\
+    &= \hat{g}[k] \int_s f(s) \cdot e^{-iks} \, ds \\
+    &= \hat{g}[k] \cdot \hat{f}[k] \qquad\square
+\end{align}
+
+\begin{remark}[Why Fubini Applies]
+Fubini's theorem allows swapping the order of integration when $\int\!\!\int |h(s,t)| \, ds \, dt < \infty$. For our images, $f$ and $g$ are finite arrays of pixel values---trivially integrable. In the discrete case, we are swapping finite sums, which requires no conditions at all.
+\end{remark}
+
+% ======================================================================
+\section{Eigenfunctions and Why This Basis is Special}
+% ======================================================================
+
+\begin{definition}[Eigenfunction]
+For a linear operator $T$ acting on functions, $\phi$ is an eigenfunction if:
+\begin{equation}
+    T[\phi] = \lambda \cdot \phi
+\end{equation}
+where $\lambda$ is a scalar (the eigenvalue). The operator just scales $\phi$---it doesn't change its shape. This is the function-space analogue of the matrix eigenvector equation $A\mathbf{v} = \lambda\mathbf{v}$.
+\end{definition}
+
+\begin{theorem}
+The complex exponentials $e^{ikt}$ are eigenfunctions of the derivative operator:
+\begin{equation}
+    \frac{d}{dt} e^{ikt} = ik \cdot e^{ikt}
+\end{equation}
+The eigenvalue is $ik$.
+\end{theorem}
+
+\begin{theorem}
+The complex exponentials are eigenfunctions of \textbf{every convolution operator}. For any kernel $g$:
+\begin{equation}
+    (g * e^{ikt})(t) = \hat{g}[k] \cdot e^{ikt}
+\end{equation}
+The eigenvalue is $\hat{g}[k]$---the $k$-th Fourier coefficient of the kernel.
+\end{theorem}
+
+\begin{intuition}
+In matrix algebra, if you find the eigenbasis of a matrix $A$, then $A$ becomes diagonal in that basis---each eigenvector just gets scaled by its eigenvalue. The Fourier basis is the eigenbasis of convolution. In the Fourier basis, convolution becomes diagonal: each frequency component just gets scaled by $\hat{g}[k]$. This is why the convolution theorem works.
+\end{intuition}
+
+% ======================================================================
+\section{Complete Property List}
+% ======================================================================
+
+Let $\hat{f}$ denote the Fourier transform of $f$, and $\hat{f}[k]$ its $k$-th coefficient.
+
+\subsection{Linearity}
+\begin{equation}
+    \widehat{af + bg}[k] = a\hat{f}[k] + b\hat{g}[k]
+\end{equation}
+\textit{Proof:} The integral is linear. \quad
+\textit{Intuition:} Mixing two sounds gives mixed frequency content. Nothing interacts.
+
+\subsection{Shift (Time Delay)}
+\begin{equation}
+    \widehat{f(t - d)}[k] = e^{-ikd} \cdot \hat{f}[k]
+\end{equation}
+\textit{Proof:} Substitute $u = t - d$, factor out $e^{-ikd}$. \quad
+\textit{Intuition:} Shifting doesn't change \emph{what} frequencies are present ($|\hat{f}[k]|$ unchanged), only \emph{where} the waves are positioned (phase changes).
+
+\subsection{Modulation (Frequency Shift)}
+\begin{equation}
+    \widehat{e^{imt} f(t)}[k] = \hat{f}[k - m]
+\end{equation}
+\textit{Proof:} The exponentials combine: $e^{imt} \cdot e^{-ikt} = e^{-i(k-m)t}$. \quad
+\textit{Intuition:} Multiplying by a complex exponential shifts all frequencies by $m$.
+
+\subsection{Convolution Theorem}
+\begin{equation}
+    \widehat{f * g}[k] = \hat{f}[k] \cdot \hat{g}[k]
+\end{equation}
+\textit{Proof:} Section 7. \quad
+\textit{Intuition:} Filtering in space = scaling in frequency. A low-pass filter multiplies high-$k$ coefficients by $\approx 0$.
+
+\subsection{Multiplication Theorem}
+\begin{equation}
+    \widehat{f \cdot g}[k] = (\hat{f} * \hat{g})[k]
+\end{equation}
+\textit{Intuition:} Pointwise multiplication in space = convolution in frequency. Windowing a signal smears its spectrum.
+
+\subsection{Parseval's Theorem (Energy Conservation)}
+\begin{equation}
+    \int |f(t)|^2 \, dt = \sum_k |\hat{f}[k]|^2
+\end{equation}
+\textit{Proof:} Expand $|f|^2$ using the Fourier series, use orthonormality---cross terms vanish. \quad
+\textit{Intuition:} Total energy is the same in both representations. The Fourier transform is a unitary change of basis---unitary maps preserve lengths.
+
+\subsection{Differentiation}
+\begin{equation}
+    \widehat{f'}[k] = ik \cdot \hat{f}[k]
+\end{equation}
+\textit{Proof:} Differentiate the reconstruction $f(t) = \sum \hat{f}[k] e^{ikt}$ term by term. \quad
+\textit{Intuition:} Differentiation amplifies high frequencies. Rapidly oscillating signals have large derivatives.
+
+\subsection{Conjugate Symmetry (Real Signals)}
+If $f(t)$ is real-valued:
+\begin{equation}
+    \hat{f}[-k] = \overline{\hat{f}[k]}
+\end{equation}
+\textit{Proof:} Conjugate the definition; $\overline{f} = f$ for real $f$; $\overline{e^{-ikt}} = e^{ikt} = e^{-i(-k)t}$. \quad
+\textit{Intuition:} Negative frequencies are redundant for real signals. The power spectrum is symmetric.
+
+\subsection{Scaling}
+\begin{equation}
+    \widehat{f(at)}[k] = \frac{1}{|a|} \hat{f}\!\left[\frac{k}{a}\right]
+\end{equation}
+\textit{Intuition:} Compressing in time stretches in frequency, and vice versa. Short pulses have broad spectra. This is the uncertainty principle.
+
+% ======================================================================
+\section{Gaussian Blur in the Frequency Domain}
+% ======================================================================
+
+The Gaussian kernel $g(x) = \frac{1}{\sqrt{2\pi}\sigma} e^{-x^2/(2\sigma^2)}$ has Fourier transform:
+\begin{equation}
+    \hat{g}[k] = e^{-2\pi^2 \sigma^2 k^2}
+\end{equation}
+
+By the convolution theorem, blurring $f$ with $g$ gives:
+\begin{equation}
+    \widehat{f * g}[k] = \hat{f}[k] \cdot e^{-2\pi^2 \sigma^2 k^2}
+\end{equation}
+
+Each frequency $k$ gets multiplied by $e^{-2\pi^2\sigma^2 k^2}$:
+\begin{itemize}
+    \item Small $k$ (low frequency): $e^{-\text{small}} \approx 1$ --- preserved
+    \item Large $k$ (high frequency): $e^{-\text{large}} \approx 0$ --- destroyed
+\end{itemize}
+
+The \textbf{effective cutoff frequency} (where attenuation reaches $1/e$):
+\begin{equation}
+    k_{\text{cutoff}} = \frac{1}{2\pi\sigma}
+\end{equation}
+
+Larger $\sigma$ = lower cutoff = more aggressive filtering.
+
+\begin{application}
+This is the core mechanism of FB-CycleGAN. The steganographic generator hides information in high-$k$ coefficients (fine patterns invisible to the eye). The Gaussian blur multiplies those coefficients by $\approx 0$, destroying the hidden channel. The generator can only encode information in the coefficients that survive the blur, which have insufficient capacity to store the tumor coordinates needed for cycle reconstruction.
+\end{application}
+
+% ======================================================================
+\section{Application: Steganographic Detection via FFT}
+% ======================================================================
+
+Given a generated image $\hat{h} = G(p)$ and its source $p$:
+
+\begin{enumerate}
+    \item Compute residual: $r = |\hat{h} - p|$
+    \item Apply Hann window: $r_w = r \cdot w_{\mathrm{Hann}}$ (taper edges to zero to prevent spectral leakage---the DFT assumes periodic signals, and sharp boundaries at the image edges create artificial high-frequency content)
+    \item Compute 2D DFT: $R = \mathrm{DFT}(r_w)$
+    \item Compute power spectrum: $P = |R|^2$
+    \item Shift zero-frequency to centre: $P_c = \mathrm{fftshift}(P)$
+    \item Compute radial average $P(\rho)$ and plot on log-log scale
+    \item Average over many samples for statistical significance
+\end{enumerate}
+
+\textbf{Steganographic generator:} Structured energy at high frequencies (bumps/plateaus in $P(\rho)$). The generator is encoding data as specific high-frequency patterns.
+
+\textbf{Honest generator:} Steep rolloff at high frequencies, no structured peaks. The residual contains only natural image differences.
+
+\textbf{Perturbation test:} Inject noise $\epsilon \sim \mathcal{N}(0, \sigma_\epsilon^2)$ before the reverse cycle: $\hat{p} = F(\hat{h} + \epsilon)$. A steganographic model collapses ($>2\times$ L1 increase) because the noise destroys the hidden signal. An honest model degrades gracefully.
+
+\end{document}

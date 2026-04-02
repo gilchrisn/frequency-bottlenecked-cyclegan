@@ -41,7 +41,8 @@ class TrainConfig:
     """Training hyperparameters and schedule."""
 
     epochs: int = 200
-    batch_size: int = 1
+    batch_size: int = 8
+    compile_models: bool = True
     lr_g: float = 2e-4
     lr_d: float = 2e-4
     beta1: float = 0.5

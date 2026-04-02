@@ -1,0 +1,271 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{mathtools}
+\usepackage{bm}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{tcolorbox}
+\usepackage{fancyhdr}
+
+\hypersetup{colorlinks=true, linkcolor=blue!70!black, urlcolor=blue!60!black}
+
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}[section]
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{remark}{Remark}[section]
+
+\newtcolorbox{insight}{colback=blue!5!white, colframe=blue!50!black,
+    title=Key Insight, fonttitle=\bfseries}
+\newtcolorbox{pitfall}{colback=red!5!white, colframe=red!50!black,
+    title=Common Misconception, fonttitle=\bfseries}
+\newtcolorbox{connection}{colback=green!5!white, colframe=green!50!black,
+    title=Connection to FB-CycleGAN, fonttitle=\bfseries}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small Fourier Analysis --- An Intuitive Journey}
+\fancyhead[R]{\small CS424 FB-CycleGAN}
+\fancyfoot[C]{\thepage}
+
+\title{\textbf{Fourier Analysis: An Intuitive Journey} \\[0.5em]
+\Large From ``How Are Images Waves?'' to Hilbert Space Forensics}
+\author{CS424 Group Project --- Internal Reference}
+\date{March 2026}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+% ======================================================================
+\section{The Setup: What Are We Even Doing?}
+% ======================================================================
+
+We want to detect whether a CycleGAN generator is ``cheating'' by hiding information as invisible noise in its output images. The tool we use is the Fourier Transform. But why?
+
+The short answer: the Fourier Transform lets you look at an image from a different angle where the cheating becomes obvious.
+
+The long answer is the rest of this document.
+
+% ======================================================================
+\section{Complex Numbers Live in 2D}
+% ======================================================================
+
+A complex number $z = a + bi$ is \textbf{not} a 1D scalar in the usual sense. It is a point in a 2D plane:
+\begin{itemize}
+    \item Real part $a$ = horizontal coordinate
+    \item Imaginary part $b$ = vertical coordinate
+    \item $|z| = \sqrt{a^2 + b^2}$ = distance from origin
+\end{itemize}
+
+Euler's formula $e^{i\theta} = \cos\theta + i\sin\theta$ maps angle $\theta$ to a point on the unit circle. As $\theta$ increases, $e^{i\theta}$ traces the circle:
+\begin{align}
+    \theta = 0 &\implies (1, 0) \quad\text{(right)} \\
+    \theta = \pi/2 &\implies (0, 1) \quad\text{(top)} \\
+    \theta = \pi &\implies (-1, 0) \quad\text{(left)} \\
+    \theta = 3\pi/2 &\implies (0, -1) \quad\text{(bottom)}
+\end{align}
+
+The function $e^{ikt}$ spins around the circle $k$ times as $t$ goes $0 \to 2\pi$. Higher $k$ = faster spin = higher frequency.
+
+% ======================================================================
+\section{The DFT as a Change of Basis}
+% ======================================================================
+
+A discrete signal of $N$ samples is a vector $\mathbf{f} \in \mathbb{C}^N$. That's just an $N$-dimensional vector space.
+
+\begin{definition}[DFT Basis]
+The $N$ vectors
+\begin{equation}
+    \mathbf{e}_k = \frac{1}{\sqrt{N}} \left(1, \; e^{-i2\pi k/N}, \; e^{-i2\pi \cdot 2k/N}, \; \ldots, \; e^{-i2\pi(N-1)k/N}\right)
+\end{equation}
+for $k = 0, 1, \ldots, N-1$ form an \textbf{orthonormal basis} for $\mathbb{C}^N$.
+\end{definition}
+
+The Fourier coefficient $\hat{f}[k] = \langle \mathbf{f}, \mathbf{e}_k \rangle$ is a projection---it measures how much of $\mathbf{f}$ ``points in the direction'' of $\mathbf{e}_k$. This is identical to how $\langle \mathbf{v}, \mathbf{e}_1 \rangle$ gives the $x$-component of a 3D vector.
+
+\begin{insight}
+The DFT is nothing more than a matrix multiplication $\hat{\mathbf{f}} = \mathbf{W}\mathbf{f}$ where $\mathbf{W}$ is unitary. It is a \textbf{rotation} (more precisely, a unitary change of basis) in $\mathbb{C}^N$. No information is lost. You are looking at the same vector from a different coordinate system.
+\end{insight}
+
+\subsection{Why Exactly $N$ Basis Functions?}
+
+If your signal has $N$ samples, your vector space is $N$-dimensional. By the fundamental theorem of linear algebra, any basis for this space has exactly $N$ vectors---no more, no fewer.
+\begin{itemize}
+    \item Fewer than $N$: cannot reach every point in the space (reconstruction fails)
+    \item More than $N$: the extra vectors are linearly dependent (redundant)
+\end{itemize}
+
+The basis function $e^{-i2\pi \cdot N \cdot n/N} = e^{-i2\pi n} = 1$ for all integer $n$. So $k = N$ produces the exact same vector as $k = 0$. This is \textbf{aliasing}---frequencies beyond $N-1$ wrap around and repeat.
+
+% ======================================================================
+\section{The Music Analogy (And Why It Breaks)}
+% ======================================================================
+
+\begin{pitfall}
+``A 3-note chord needs 3 basis functions, one per note.'' \textbf{Wrong.}
+
+A musical note is \textbf{not} a single complex exponential. A real piano note has a fundamental frequency plus dozens of overtones, transients, and decay. Reconstructing one note requires non-zero coefficients for hundreds of DFT basis functions.
+
+Even a pure sine wave requires \textbf{two} basis functions (positive and negative frequency) to produce a real-valued signal, due to conjugate symmetry.
+
+The DFT basis functions are the ``atoms.'' A note is a molecule built from many atoms. $N$ is determined by your sample count, not by how many notes you play.
+\end{pitfall}
+
+% ======================================================================
+\section{2D Fourier: Images as Sums of Stripes}
+% ======================================================================
+
+An image $f[m,n]$ of size $M \times N$ lives in $\mathbb{C}^{M \times N}$, which has $MN$ dimensions. The 2D basis functions are tensor products of 1D basis functions:
+\begin{equation}
+    e_{u,v}[m,n] = e^{-i2\pi um/M} \cdot e^{-i2\pi vn/N} = e^{-i2\pi(um/M + vn/N)}
+\end{equation}
+
+\begin{itemize}
+    \item $u$ controls oscillation speed along the horizontal axis
+    \item $v$ controls oscillation speed along the vertical axis
+    \item Together, they produce \textbf{stripes} at angle $\arctan(v/u)$ with frequency $\sqrt{u^2 + v^2}$
+\end{itemize}
+
+\subsection{Why a Product?}
+
+It is not a coincidence. If $\{\phi_u\}$ and $\{\psi_v\}$ are orthonormal bases for $\mathbb{C}^M$ and $\mathbb{C}^N$ respectively, then $\{\phi_u \cdot \psi_v\}$ is an orthonormal basis for $\mathbb{C}^{M \times N}$.
+
+\textbf{Proof sketch:} The inner product factorises because the sums over $m$ and $n$ are independent:
+\begin{equation}
+    \langle e_{u,v}, e_{x,y} \rangle = \underbrace{\left(\sum_m \phi_u[m] \overline{\phi_x[m]}\right)}_{\delta_{u,x}} \cdot \underbrace{\left(\sum_n \psi_v[n] \overline{\psi_y[n]}\right)}_{\delta_{v,y}} = \delta_{u,x}\delta_{v,y}
+\end{equation}
+Zero unless both indices match. This extends trivially to 3D, 4D, etc.
+
+\begin{pitfall}
+``Can I just flatten the image to 1D and use a single index $k \in [0, MN-1]$?''
+
+Mathematically: yes, $\mathbb{C}^{M \times N} \cong \mathbb{C}^{MN}$. Practically: \textbf{catastrophic.} Flattening destroys the 2D spatial topology. Pixel $(0, N-1)$ at the end of row 0 and pixel $(1, 0)$ at the start of row 1 are spatial neighbours but become distant in the flattened array. The 1D basis functions cannot represent 2D features (edges, textures) cleanly.
+
+Use $(u, v)$ because $(x, y)$ exists. Respect the geometry.
+\end{pitfall}
+
+% ======================================================================
+\section{Power Spectrum: Where Is the Energy?}
+% ======================================================================
+
+\begin{definition}[Power Spectrum]
+\begin{equation}
+    P[u,v] = |\hat{f}[u,v]|^2 = \mathrm{Re}(\hat{f}[u,v])^2 + \mathrm{Im}(\hat{f}[u,v])^2
+\end{equation}
+\end{definition}
+
+This measures the \textbf{energy} (variance) at frequency $(u,v)$. By Parseval's theorem, total spatial energy equals total spectral energy:
+\begin{equation}
+    \sum_{m,n} |f[m,n]|^2 = \frac{1}{MN} \sum_{u,v} |\hat{f}[u,v]|^2
+\end{equation}
+
+\begin{pitfall}
+``The power spectrum measures the magnitude of the basis function.'' \textbf{Wrong.} The magnitude of $e^{i\theta}$ is always exactly 1. The power spectrum measures the magnitude squared of the \textbf{coefficients}---how much weight each basis function carries in the decomposition of your specific image.
+\end{pitfall}
+
+% ======================================================================
+\section{FFT Shift: Fixing the Array Layout}
+% ======================================================================
+
+The raw DFT output stores frequencies in a counterintuitive order:
+\begin{itemize}
+    \item Index $0$: DC component (zero frequency)
+    \item Indices $1$ to $N/2$: positive frequencies (increasing)
+    \item Indices $N/2+1$ to $N-1$: \textbf{negative} frequencies (due to periodicity)
+\end{itemize}
+
+The key identity: $e^{-i2\pi(N-1)n/N} = e^{+i2\pi n/N}$. Index $N-1$ is frequency $-1$, not a high frequency. It has \textbf{nearly the same energy} as index 1.
+
+Without shifting, the bright low-frequency energy is split across all four corners of the 2D array. \texttt{fftshift} swaps quadrants diagonally, placing the DC component at the center. After shifting:
+\begin{itemize}
+    \item \textbf{Center} = zero frequency (brightest)
+    \item \textbf{Edges} = Nyquist frequency (darkest for natural images)
+    \item Energy decays radially outward
+\end{itemize}
+
+This is required for correct radial averaging---without it, your distance-from-origin calculation is geometrically wrong.
+
+% ======================================================================
+\section{The $1/f^\alpha$ Power Law}
+% ======================================================================
+
+Natural images obey a statistical law: their radial power spectrum decays as
+\begin{equation}
+    P(\rho) \propto \frac{1}{\rho^\alpha}, \qquad \alpha \approx 2
+\end{equation}
+
+\textbf{Why?} Physical objects have smooth surfaces. Adjacent pixels are highly correlated. Smooth regions are low-frequency objects. Sharp edges exist but are sparse.
+
+\begin{insight}
+This power law means natural images are \textbf{sparse} in the Fourier basis. Nearly 99\% of the energy concentrates in $<$1\% of the basis dimensions (the low frequencies). The high-frequency subspace is practically \textbf{empty}.
+
+This is the mathematical real estate where steganographic data hides. The power law guarantees the space is empty; the Fourier transform gives you the map to inspect it.
+\end{insight}
+
+% ======================================================================
+\section{The Functional Analysis Perspective}
+% ======================================================================
+
+Translating everything into abstract algebra:
+
+\subsection{The Hilbert Space}
+
+An $M \times N$ image is a vector $f$ in the finite-dimensional Hilbert space $\mathcal{H} = \mathbb{C}^{MN}$, equipped with the Hermitian inner product:
+\begin{equation}
+    \langle f, g \rangle = \sum_{m,n} f[m,n] \overline{g[m,n]}
+\end{equation}
+
+\subsection{The Unitary Operator}
+
+The DFT is a unitary operator $U: \mathcal{H} \to \mathcal{H}$ satisfying $U^*U = I$. It is an \textbf{isometry}: it preserves inner products, norms, and angles. The Fourier and pixel representations contain identical information, viewed from different bases.
+
+\subsection{Convolution as Operator Diagonalisation}
+
+Convolution with kernel $g$ is a linear operator (a circulant matrix $C_g$). The Fourier basis \textbf{simultaneously diagonalises all circulant matrices}:
+\begin{equation}
+    C_g = U^* \Lambda_g U
+\end{equation}
+where $\Lambda_g$ is diagonal with entries $\hat{g}[k]$. This is why the Convolution Theorem works: convolution becomes pointwise multiplication in the eigenbasis.
+
+\subsection{Steganography as Subspace Separation}
+
+Due to the $1/f^\alpha$ law, natural images occupy a low-dimensional subspace of $\mathcal{H}$: their projections onto high-frequency basis vectors are near zero. Steganographic noise is pseudo-random with uniform spectral energy.
+
+In the spatial basis, signal and noise are entangled at every pixel. In the Fourier basis, they naturally separate:
+\begin{itemize}
+    \item Low-frequency subspace: $\|\langle f_{\text{cover}}, e_{\text{low}}\rangle\| \gg \|\langle w, e_{\text{low}}\rangle\|$ (signal dominates)
+    \item High-frequency subspace: $\langle f_{\text{stego}}, e_{\text{high}}\rangle \approx \langle w, e_{\text{high}}\rangle$ (only noise remains)
+\end{itemize}
+
+\begin{connection}
+The Gaussian blur in FB-CycleGAN is a circulant operator. In the Fourier basis, it becomes diagonal: $\Lambda_B[k] = e^{-2\pi^2\sigma^2 k^2}$. This zeros out exactly the high-frequency subspace where steganographic data lives, while preserving the low-frequency structural content. The generator can no longer write to those coordinates because the blur operator annihilates them before the reverse generator reads them.
+\end{connection}
+
+% ======================================================================
+\section{Connecting Everything: The Forensic Audit}
+% ======================================================================
+
+Now we can state precisely what the forensic audit measures:
+
+\subsection{FFT Residual Analysis}
+
+Compute the residual $r = |G(x) - x|$ and project it into the Fourier basis. In an honest translation, $r$ is spatially localised (only the tumor region changes), which means its energy concentrates at low frequencies (the $1/f^\alpha$ law). In a steganographic translation, $r$ contains hidden data spread across all pixels, which means its high-frequency coefficients are anomalously large---the power spectrum plateaus instead of decaying.
+
+\subsection{Perturbation Test}
+
+Add noise $\epsilon \sim \mathcal{N}(0, \sigma_\epsilon^2)$ to the generated image. White noise has uniform spectral energy. At high frequencies where the hidden signal is faint, even tiny noise overwhelms the steganographic coefficients (SNR $\to$ 1). The reverse generator can no longer read the hidden message, and reconstruction collapses catastrophically.
+
+An honest generator reconstructs from low-frequency structural features, which are robust to noise (the signal is orders of magnitude larger than the perturbation in that subspace). Reconstruction degrades gracefully.
+
+\subsection{The Pareto Tradeoff}
+
+Increasing $\sigma$ in the Gaussian blur lowers the cutoff frequency, shrinking the subspace available to the generator. At some $\sigma^*$, the available subspace is too small to encode the tumor coordinates, forcing honest translation. But too large $\sigma$ also destroys legitimate high-frequency detail (edges, texture), reducing translation quality. The Pareto analysis sweeps $\sigma$ to find the optimal operating point.
+
+\end{document}

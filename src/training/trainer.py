@@ -50,11 +50,23 @@ class CycleGANTrainer:
         self.device = torch.device(config.device)
         self.logger = get_logger("trainer", log_dir=f"{config.output_dir}/logs")
 
+        # --- Performance: fixed input size, let cuDNN find fastest kernels ---
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+
         # --- Models ---
         self.G_AB = create_generator(config.model).to(self.device)
         self.G_BA = create_generator(config.model).to(self.device)
         self.D_A = create_discriminator(config.model).to(self.device)
         self.D_B = create_discriminator(config.model).to(self.device)
+
+        # --- torch.compile for optimized kernels (PyTorch 2.x) ---
+        if config.train.compile_models and hasattr(torch, "compile"):
+            self.logger.info("Compiling models with torch.compile...")
+            self.G_AB = torch.compile(self.G_AB)
+            self.G_BA = torch.compile(self.G_BA)
+            self.D_A = torch.compile(self.D_A)
+            self.D_B = torch.compile(self.D_B)
 
         # --- Losses ---
         self.criterion_gan = GANLoss(config.loss.gan_mode).to(self.device)
