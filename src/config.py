@@ -32,7 +32,8 @@ class LossConfig:
     lambda_cycle: float = 10.0
     lambda_identity: float = 0.5
     use_frequency_bottleneck: bool = False
-    bottleneck_type: str = "gaussian"  # gaussian | ideal_lowpass | svd | autoencoder
+    # gaussian | ideal_lowpass | svd | autoencoder | learned_spectral
+    bottleneck_type: str = "gaussian"
     blur_kernel_size: int = 5
     blur_sigma: float = 1.0
     # Ideal low-pass specific
@@ -42,6 +43,9 @@ class LossConfig:
     # Autoencoder specific
     ae_latent_dim: int = 256           # autoencoder bottleneck dimension
     ae_checkpoint: str = ""            # path to pretrained AE checkpoint
+    # Learned spectral mask specific
+    image_size: int = 256              # must match DataConfig.image_size
+    mask_sparsity_gamma: float = 0.01  # weight on L1 sparsity penalty
 
 
 @dataclass
@@ -56,6 +60,10 @@ class TrainConfig:
     compile_models: bool = False
     lr_g: float = 2e-4
     lr_d: float = 2e-4
+    # Mask optimizer lr — intentionally slower than lr_g so sparsity penalty
+    # converges gradually rather than collapsing the mask on the first update.
+    # Rule of thumb: lr_mask = lr_g * 0.1. Override per-preset if needed.
+    lr_mask: float = 2e-5
     beta1: float = 0.5
     beta2: float = 0.999
     lr_policy: str = "linear"
@@ -180,6 +188,25 @@ PRESETS: Dict[str, ExperimentConfig] = {
             bottleneck_type="autoencoder",
             ae_checkpoint="outputs/checkpoints/ae_pretrained.pt",
             ae_latent_dim=256,
+        ),
+    ),
+    # --- Learned spectral mask ---
+    "fb_learned_spectral": ExperimentConfig(
+        name="fb_learned_spectral",
+        loss=LossConfig(
+            use_frequency_bottleneck=True,
+            bottleneck_type="learned_spectral",
+            image_size=256,
+            mask_sparsity_gamma=0.01,
+        ),
+    ),
+    "fb_learned_spectral_sparse": ExperimentConfig(
+        name="fb_learned_spectral_sparse",
+        loss=LossConfig(
+            use_frequency_bottleneck=True,
+            bottleneck_type="learned_spectral",
+            image_size=256,
+            mask_sparsity_gamma=0.05,  # stronger sparsity pressure
         ),
     ),
 }
