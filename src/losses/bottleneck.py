@@ -1,10 +1,15 @@
 """Frequency bottleneck for FB-CycleGAN.
 
-Applies a fixed (non-learnable) Gaussian blur to the cycle path, destroying
-high-frequency steganographic artifacts that generators might hide in
-translated images. The blur is fully differentiable so gradients flow
-through, but the zero-parameter constraint prevents the network from
-learning to circumvent it.
+Applies a bottleneck to the cycle path, destroying the high-frequency
+bandwidth that generators use for steganographic encoding. The bottleneck
+is fully differentiable so gradients flow through the cycle path.
+
+Supported bottleneck types (config.loss.bottleneck_type):
+    gaussian          Fixed Gaussian blur — zero learnable parameters.
+    ideal_lowpass     Hard frequency cutoff in FFT domain.
+    svd               Rank-k SVD truncation.
+    autoencoder       Pretrained frozen autoencoder.
+    learned_spectral  Learnable soft mask in FFT domain (LearnedSpectralBottleneck).
 """
 
 import math
@@ -115,10 +120,11 @@ def create_bottleneck(config: LossConfig) -> nn.Module:
         Returns IdentityBottleneck if use_frequency_bottleneck is False.
 
     Supported bottleneck_type values:
-        - "gaussian": Fixed Gaussian blur (default)
-        - "ideal_lowpass": Hard frequency cutoff in FFT domain
-        - "svd": Rank-k SVD truncation
-        - "autoencoder": Pretrained frozen autoencoder
+        - "gaussian":          Fixed Gaussian blur (default)
+        - "ideal_lowpass":     Hard frequency cutoff in FFT domain
+        - "svd":               Rank-k SVD truncation
+        - "autoencoder":       Pretrained frozen autoencoder
+        - "learned_spectral":  Learnable soft frequency mask (LearnedSpectralBottleneck)
     """
     if not config.use_frequency_bottleneck:
         return IdentityBottleneck()
@@ -142,8 +148,14 @@ def create_bottleneck(config: LossConfig) -> nn.Module:
             checkpoint_path=config.ae_checkpoint,
             latent_dim=config.ae_latent_dim,
         )
+    elif btype == "learned_spectral":
+        from src.losses.learned_mask import LearnedSpectralBottleneck
+        return LearnedSpectralBottleneck(
+            height=config.image_size,
+            width=config.image_size,
+        )
     else:
         raise ValueError(
             f"Unknown bottleneck_type '{btype}'. "
-            "Supported: gaussian, ideal_lowpass, svd, autoencoder"
+            "Supported: gaussian, ideal_lowpass, svd, autoencoder, learned_spectral"
         )

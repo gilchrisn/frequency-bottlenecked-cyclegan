@@ -18,7 +18,14 @@ from tqdm import tqdm
 
 from src.config import ExperimentConfig
 from src.models import create_generator, create_discriminator
-from src.losses import GANLoss, CycleConsistencyLoss, IdentityLoss, create_bottleneck
+from src.losses import (
+    GANLoss,
+    CycleConsistencyLoss,
+    IdentityLoss,
+    create_bottleneck,
+    build_mask_optimizer,
+    sparsity_loss,
+)
 from src.training.replay_buffer import ReplayBuffer
 from src.training.scheduler import create_scheduler
 from src.utils import ensure_dir, get_logger
@@ -88,6 +95,15 @@ class CycleGANTrainer:
             lr=config.train.lr_d,
             betas=(config.train.beta1, config.train.beta2),
         )
+
+        # Dedicated mask optimizer — separate from optimizer_G so the sparsity
+        # penalty isn't drowned out by the cycle loss (see learned_mask.py).
+        # Returns None for non-learnable bottlenecks (Gaussian, Identity).
+        self.optimizer_mask = build_mask_optimizer(self.bottleneck, config)
+        if self.optimizer_mask is not None:
+            self.logger.info(
+                "Mask optimizer created (lr=%.2e)", config.train.lr_mask
+            )
 
         # --- Schedulers ---
         self.scheduler_G = create_scheduler(self.optimizer_G, config.train)
@@ -213,6 +229,22 @@ class CycleGANTrainer:
             loss_G.backward()
             self.optimizer_G.step()
 
+            # =====================
+            # Mask optimizer step (learned_spectral only)
+            # =====================
+            # Runs on a separate backward pass so the sparsity gradient is not
+            # mixed with the generator gradient. The mask's logits receive:
+            #   - a positive gradient from cycle loss (via the shared graph above)
+            #   - a negative gradient here from the sparsity penalty
+            # Keeping them separate prevents the cycle loss from dominating.
+            loss_sparsity = sparsity_loss(
+                self.bottleneck, self.config.loss.mask_sparsity_gamma
+            )
+            if self.optimizer_mask is not None and loss_sparsity.requires_grad:
+                self.optimizer_mask.zero_grad()
+                loss_sparsity.backward()
+                self.optimizer_mask.step()
+
             # ========================
             # Discriminator optimization
             # ========================
@@ -250,11 +282,21 @@ class CycleGANTrainer:
                 progress.set_postfix(
                     G=f"{loss_G.item():.4f}",
                     D=f"{loss_D.item():.4f}",
+                    sp=f"{loss_sparsity.item():.4f}",
                     lr=f"{lr:.6f}",
                 )
 
                 if self.wandb_run is not None:
                     import wandb
+
+                    # Bandwidth: fraction of freq bins with mask > 0.5.
+                    # Logged only for learned_spectral; 1.0 for all others.
+                    from src.losses import LearnedSpectralBottleneck
+                    mask_bandwidth = (
+                        self.bottleneck.bandwidth()
+                        if isinstance(self.bottleneck, LearnedSpectralBottleneck)
+                        else 1.0
+                    )
 
                     wandb.log(
                         {
@@ -265,6 +307,8 @@ class CycleGANTrainer:
                             "loss/G_identity": loss_idt.item(),
                             "loss/D_A": loss_D_A.item(),
                             "loss/D_B": loss_D_B.item(),
+                            "loss/mask_sparsity": loss_sparsity.item(),
+                            "mask/bandwidth": mask_bandwidth,
                             "lr": lr,
                             "epoch": epoch,
                         },
@@ -348,12 +392,17 @@ class CycleGANTrainer:
             "G_BA": self.G_BA.state_dict(),
             "D_A": self.D_A.state_dict(),
             "D_B": self.D_B.state_dict(),
+            "bottleneck": self.bottleneck.state_dict(),
             "optimizer_G": self.optimizer_G.state_dict(),
             "optimizer_D": self.optimizer_D.state_dict(),
             "scheduler_G": self.scheduler_G.state_dict(),
             "scheduler_D": self.scheduler_D.state_dict(),
             "config": vars(self.config),
         }
+
+        # Persist mask optimizer state only when it exists (learned_spectral).
+        if self.optimizer_mask is not None:
+            state["optimizer_mask"] = self.optimizer_mask.state_dict()
 
         path = self.checkpoint_dir / f"epoch_{epoch:04d}.pt"
         torch.save(state, path)
@@ -384,6 +433,14 @@ class CycleGANTrainer:
         self.optimizer_D.load_state_dict(state["optimizer_D"])
         self.scheduler_G.load_state_dict(state["scheduler_G"])
         self.scheduler_D.load_state_dict(state["scheduler_D"])
+
+        # Bottleneck state (present in checkpoints saved after this change).
+        if "bottleneck" in state:
+            self.bottleneck.load_state_dict(state["bottleneck"])
+
+        # Mask optimizer state (only present for learned_spectral runs).
+        if "optimizer_mask" in state and self.optimizer_mask is not None:
+            self.optimizer_mask.load_state_dict(state["optimizer_mask"])
 
         epoch = state["epoch"]
         self.logger.info("Restored from epoch %d", epoch)
