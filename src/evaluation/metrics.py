@@ -46,11 +46,12 @@ def compute_fid(
         )
         return images
 
-    real_prep = _prepare(real_images.to(device))
-    fake_prep = _prepare(fake_images.to(device))
-
-    fid.update(real_prep, real=True)
-    fid.update(fake_prep, real=False)
+    # Feed images in small batches to avoid OOM — FID supports incremental updates
+    chunk = 64
+    for i in range(0, len(real_images), chunk):
+        fid.update(_prepare(real_images[i:i + chunk].to(device)), real=True)
+    for i in range(0, len(fake_images), chunk):
+        fid.update(_prepare(fake_images[i:i + chunk].to(device)), real=False)
 
     score = fid.compute().item()
     return score
