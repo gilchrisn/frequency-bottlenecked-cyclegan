@@ -52,15 +52,23 @@ def load_generators(checkpoint_path: str, device: torch.device):
     """
     state = torch.load(checkpoint_path, map_location=device, weights_only=False)
     saved_cfg = state.get("config", {})
-    model_cfg_dict = saved_cfg.get("model", {}) if isinstance(saved_cfg, dict) else {}
 
-    model_cfg = ModelConfig(
-        input_channels=model_cfg_dict.get("input_channels", 1),
-        output_channels=model_cfg_dict.get("output_channels", 1),
-        ngf=model_cfg_dict.get("ngf", 64),
-        norm_type=model_cfg_dict.get("norm_type", "instance"),
-        no_dropout=model_cfg_dict.get("no_dropout", True),
-    )
+    # vars(config) saves dataclass fields as a dict, but nested fields remain
+    # as dataclass instances (e.g. saved_cfg["model"] is a ModelConfig object).
+    # Handle both dataclass and plain-dict representations.
+    model_raw = saved_cfg.get("model", {}) if isinstance(saved_cfg, dict) else {}
+    if isinstance(model_raw, ModelConfig):
+        model_cfg = model_raw
+    elif isinstance(model_raw, dict):
+        model_cfg = ModelConfig(
+            input_channels=model_raw.get("input_channels", 1),
+            output_channels=model_raw.get("output_channels", 1),
+            ngf=model_raw.get("ngf", 64),
+            norm_type=model_raw.get("norm_type", "instance"),
+            no_dropout=model_raw.get("no_dropout", True),
+        )
+    else:
+        model_cfg = ModelConfig()
 
     G_AB = create_generator(model_cfg).to(device)
     G_BA = create_generator(model_cfg).to(device)
