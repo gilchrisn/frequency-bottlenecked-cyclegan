@@ -71,8 +71,12 @@ def compute_ssim(
         Mean SSIM score (higher is better).
     """
     ssim = StructuralSimilarityIndexMeasure(data_range=2.0)
-    score = ssim(images1, images2).item()
-    return score
+    chunk = 64
+    total_score = 0.0
+    n = len(images1)
+    for i in range(0, n, chunk):
+        total_score += ssim(images1[i:i + chunk], images2[i:i + chunk]).item() * (min(i + chunk, n) - i)
+    return total_score / n
 
 
 def evaluate_model(

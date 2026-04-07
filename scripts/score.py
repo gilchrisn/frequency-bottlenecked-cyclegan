@@ -144,24 +144,30 @@ def score_checkpoint(
                 break
 
     import torch as _torch
-    real_A_cat = _torch.cat(all_real_A, dim=0)
-    real_B_cat = _torch.cat(all_real_B, dim=0)
-    fake_A_cat = _torch.cat(all_fake_A, dim=0)
-    fake_B_cat = _torch.cat(all_fake_B, dim=0)
-    cycle_A_cat = _torch.cat(all_cycle_A, dim=0)
-    cycle_B_cat = _torch.cat(all_cycle_B, dim=0)
+    import gc
+    real_A_cat = _torch.cat(all_real_A, dim=0);  del all_real_A
+    real_B_cat = _torch.cat(all_real_B, dim=0);  del all_real_B
+    fake_A_cat = _torch.cat(all_fake_A, dim=0);  del all_fake_A
+    fake_B_cat = _torch.cat(all_fake_B, dim=0);  del all_fake_B
+    cycle_A_cat = _torch.cat(all_cycle_A, dim=0); del all_cycle_A
+    cycle_B_cat = _torch.cat(all_cycle_B, dim=0); del all_cycle_B
+    gc.collect()
 
     print(f"  Computing FID (A→B)... ({len(real_B_cat)} samples)")
     fid_AB = compute_fid(real_B_cat, fake_B_cat, device)
+    del fake_B_cat; gc.collect(); _torch.cuda.empty_cache()
 
     print(f"  Computing FID (B→A)... ({len(real_A_cat)} samples)")
     fid_BA = compute_fid(real_A_cat, fake_A_cat, device)
+    del fake_A_cat; gc.collect(); _torch.cuda.empty_cache()
 
     print("  Computing SSIM (cycle A)...")
     ssim_cycle_A = compute_ssim(real_A_cat, cycle_A_cat)
+    del cycle_A_cat; del real_A_cat; gc.collect()
 
     print("  Computing SSIM (cycle B)...")
     ssim_cycle_B = compute_ssim(real_B_cat, cycle_B_cat)
+    del cycle_B_cat; del real_B_cat; gc.collect()
 
     return {
         "fid_AB": fid_AB,
