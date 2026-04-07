@@ -160,13 +160,18 @@ def generate_synthetic_images(
     """
     state = torch.load(checkpoint_path, map_location=device, weights_only=False)
     saved_cfg = state.get("config", {})
-    model_cfg_dict = saved_cfg.get("model", {}) if isinstance(saved_cfg, dict) else {}
+    model_raw = saved_cfg.get("model", {}) if isinstance(saved_cfg, dict) else {}
 
-    model_cfg = ModelConfig(
-        input_channels=model_cfg_dict.get("input_channels", 1),
-        output_channels=model_cfg_dict.get("output_channels", 1),
-        ngf=model_cfg_dict.get("ngf", 64),
-    )
+    if isinstance(model_raw, ModelConfig):
+        model_cfg = model_raw
+    elif isinstance(model_raw, dict):
+        model_cfg = ModelConfig(
+            input_channels=model_raw.get("input_channels", 1),
+            output_channels=model_raw.get("output_channels", 1),
+            ngf=model_raw.get("ngf", 64),
+        )
+    else:
+        model_cfg = ModelConfig()
 
     G_BA = create_generator(model_cfg).to(device)
     G_BA.load_state_dict(state["G_BA"])
