@@ -140,6 +140,36 @@ class HealthyDataset(Dataset):
         return {"image": tensor, "stem": self.paths[idx].stem}
 
 
+class PathologicalDataset(Dataset):
+    """Minimal dataset that loads pathological (domain A) slices for cycle generation."""
+
+    def __init__(self, processed_dir: str, split: str = "train") -> None:
+        super().__init__()
+        processed_dir = Path(processed_dir)
+        split_path = processed_dir / "split.json"
+        with open(split_path) as f:
+            split_data = json.load(f)
+        patient_ids = set(split_data[split])
+
+        self.paths = []
+        path_dir = processed_dir / "pathological"
+        if path_dir.exists():
+            for p in sorted(path_dir.glob("*.npy")):
+                stem = p.stem
+                parts = stem.rsplit("_slice", 1)
+                if len(parts) == 2 and parts[0] in patient_ids:
+                    self.paths.append(p)
+
+    def __len__(self) -> int:
+        return len(self.paths)
+
+    def __getitem__(self, idx: int) -> dict:
+        arr = np.load(self.paths[idx]).astype(np.float32)
+        arr = np.clip(arr, -3.0, 3.0) / 3.0
+        tensor = torch.from_numpy(arr).unsqueeze(0)
+        return {"image": tensor, "stem": self.paths[idx].stem}
+
+
 def generate_synthetic_images(
     checkpoint_path: str,
     processed_dir: str,
@@ -148,13 +178,18 @@ def generate_synthetic_images(
     batch_size: int = 4,
     device: torch.device = torch.device("cpu"),
 ) -> None:
-    """Generate synthetic pathological images (G_BA(healthy)) and save as .npy.
+    """Generate synthetic pathological images via cycle: path→healthy→path.
+
+    Translates real pathological images through the full cycle
+    (G_AB then G_BA), producing synthetic pathological images with
+    the SAME filenames as the originals. This ensures the existing
+    masks in data/processed/masks/ remain spatially aligned.
 
     Args:
         checkpoint_path: Path to CycleGAN checkpoint.
         processed_dir: Processed data directory.
         output_dir: Directory to save synthetic .npy images.
-        split: Dataset split to generate from (uses healthy images).
+        split: Dataset split to generate from (uses pathological images).
         batch_size: Generation batch size.
         device: Torch device.
     """
@@ -173,25 +208,29 @@ def generate_synthetic_images(
     else:
         model_cfg = ModelConfig()
 
+    G_AB = create_generator(model_cfg).to(device)
     G_BA = create_generator(model_cfg).to(device)
+    G_AB.load_state_dict(state["G_AB"])
     G_BA.load_state_dict(state["G_BA"])
+    G_AB.eval()
     G_BA.eval()
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    dataset = HealthyDataset(processed_dir, split=split)
+    dataset = PathologicalDataset(processed_dir, split=split)
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=0)
 
-    print(f"Generating {len(dataset)} synthetic pathological images...")
+    print(f"Generating {len(dataset)} cycle-reconstructed pathological images (path→healthy→path)...")
 
     with torch.no_grad():
         for batch in tqdm(loader, desc="Generating"):
-            real_B = batch["image"].to(device)
-            fake_A = G_BA(real_B)  # synthetic pathological
+            real_A = batch["image"].to(device)
+            fake_B = G_AB(real_A)      # pathological → healthy
+            cycle_A = G_BA(fake_B)     # healthy → pathological (cycle)
 
             for i, stem in enumerate(batch["stem"]):
-                img = fake_A[i, 0].cpu().numpy()  # (H, W)
+                img = cycle_A[i, 0].cpu().numpy()  # (H, W)
                 np.save(output_dir / f"{stem}.npy", img.astype(np.float32))
 
     print(f"Saved {len(dataset)} synthetic images to {output_dir}")
